@@ -355,6 +355,7 @@ function setBg(mode){
   if(mode!=='none') loadSeg();
 }
 document.querySelectorAll('.bgSel').forEach(s=>s.addEventListener('change',()=>setBg(s.value)));
+if(MOBILE) notice('Das Podcast-Studio ist für den Computer gedacht. Bitte öffne diesen Link am Laptop oder PC in Chrome oder Edge – am Handy klappt die Verbindung nicht zuverlässig.');
 if(MOBILE){ document.querySelectorAll('.bgSel').forEach(s=>{ s.disabled=true; s.options[0].textContent='Am Handy nicht verfügbar'; }); }
 else try{ const b=localStorage.getItem('ps-bg'); if(b) setBg(b); }catch(e){}
 
