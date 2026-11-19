@@ -71,6 +71,15 @@
         <select id="micSel"></select>
         <label for="camSel">Kamera</label>
         <select id="camSel"></select>
+        <label for="bgSel">Hintergrund</label>
+        <select id="bgSel" class="bgSel">
+          <option value="none">Original (kein Effekt)</option>
+          <option value="blur">Weichzeichnen</option>
+          <option value="grau">Neutral – Grau</option>
+          <option value="hell">Neutral – Hell</option>
+          <option value="gruen">Neutral – Dunkelgrün</option>
+          <option value="bk">Biohacking Kompakt</option>
+        </select>
         <label>Pegel – sprich normal, der Balken sollte bis etwa ¾ gehen</label>
         <div class="meter"><div id="selfMeter"></div></div>
         <label style="display:flex;gap:8px;align-items:center;color:var(--text);margin-top:14px">
@@ -101,6 +110,17 @@
       </div>
     </div>
 
+    <div class="row" style="margin-bottom:12px"><label for="bgSel2" style="margin:0;color:var(--text)">Mein Hintergrund:</label>
+      <select id="bgSel2" class="bgSel" style="width:auto">
+        <option value="none">Original (kein Effekt)</option>
+        <option value="blur">Weichzeichnen</option>
+        <option value="grau">Neutral – Grau</option>
+        <option value="hell">Neutral – Hell</option>
+        <option value="gruen">Neutral – Dunkelgrün</option>
+        <option value="bk">Biohacking Kompakt</option>
+      </select>
+      <span class="hint">Der Effekt ist auch in der Aufnahme. Dieses Fenster während der Aufnahme bitte im Vordergrund lassen.</span>
+    </div>
     <div class="tiles" id="tiles"></div>
 
     <div class="grid2" style="margin-top:16px">
@@ -128,6 +148,8 @@ const CHUNK_MAX = 3.3 * 1024 * 1024;      // Make-Webhook-Limit 5 MB inkl. Overh
 const AUDIO_CHUNK_SEC = 60;               // Audio spätestens jede Minute hochladen
 const VIDEO_BPS = 2_000_000;              // 720p, ca. 0,9 GB pro Stunde
 const AUDIO_BPS = 192_000;
+const VISION = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
+const SEG_MODEL = 'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite';
 const ICE = [{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}];
 
 /* ================= Helfer ================= */
@@ -204,7 +226,92 @@ class Track {
 }
 
 /* ================= Zustand ================= */
-const S = { stream:null, peer:null, conns:{}, calls:{}, names:{}, status:{}, recording:false, t0:0, session:'', who:'', tracks:[], markers:[], wake:null };
+const S = { raw:null, stream:null, peer:null, conns:{}, calls:{}, names:{}, status:{}, recording:false, t0:0, session:'', who:'', tracks:[], markers:[], wake:null };
+
+/* ================= Hintergrund (Freistellung im Browser) ================= */
+const BG = { mode:'none', seg:null, loading:null, track:null, busy:false, bkCache:null,
+  vid:document.createElement('video'), out:document.createElement('canvas'), person:document.createElement('canvas'), mask:document.createElement('canvas') };
+BG.vid.muted=true; BG.vid.playsInline=true;
+BG.small=document.createElement('canvas'); BG.small.width=128; BG.small.height=72; BG.last=0; BG.n=0;
+const BG_COLORS = { grau:'#3b4048', hell:'#e9ebe6', gruen:'#12271f' };
+async function loadSeg(){
+  return BG.loading ||= (async()=>{
+    const v=await import(VISION+'/vision_bundle.mjs');
+    const fs=await v.FilesetResolver.forVisionTasks(VISION+'/wasm');
+    const opts=d=>({baseOptions:{modelAssetPath:SEG_MODEL,delegate:d},runningMode:'VIDEO',outputCategoryMask:false,outputConfidenceMasks:true});
+    try{ BG.seg=await v.ImageSegmenter.createFromOptions(fs,opts('GPU')); }
+    catch(e){ BG.seg=await v.ImageSegmenter.createFromOptions(fs,opts('CPU')); }
+    log('Hintergrund-Erkennung bereit.');
+  })().catch(e=>{ BG.loading=null; log('Hintergrund-Erkennung nicht verfügbar: '+e.message); });
+}
+function videoTrackFor(raw){
+  BG.vid.srcObject=new MediaStream([raw]); BG.vid.play().catch(()=>{});
+  const s=raw.getSettings(); BG.out.width=s.width||1280; BG.out.height=s.height||720; BG.bkCache=null;
+  if(!BG.track){
+    BG.track=BG.out.captureStream(30).getVideoTracks()[0];
+    // Takt aus einem Worker: läuft auch weiter, wenn das Fenster kurz im Hintergrund ist
+    const w=new Worker(URL.createObjectURL(new Blob(['setInterval(()=>postMessage(0),33)'],{type:'text/javascript'})));
+    w.onmessage=drawFrame;
+  }
+  return BG.track;
+}
+function drawFrame(){
+  const v=BG.vid; if(v.readyState<2) return;
+  const now=performance.now(); if(now-BG.last<28) return; BG.last=now;   // Rückstau vermeiden
+  const W=BG.out.width, H=BG.out.height, o=BG.out.getContext('2d');
+  if(BG.mode==='none' || !BG.seg){ o.filter='none'; o.drawImage(v,0,0,W,H); return; }
+  if(!BG.busy && (BG.n++ % 2===0)){ BG.busy=true;   // Maske mit 15 Bildern/s reicht
+    try{ BG.seg.segmentForVideo(v, performance.now(), r=>{
+      const m=r.confidenceMasks[0], mw=m.width, mh=m.height, f=m.getAsFloat32Array(), mc=BG.mask;
+      if(mc.width!==mw||mc.height!==mh||!BG.mimg){ mc.width=mw; mc.height=mh; BG.mimg=mc.getContext('2d').createImageData(mw,mh); }
+      const d=BG.mimg.data; for(let i=0;i<f.length;i++) d[i*4+3]=f[i]*255;
+      mc.getContext('2d').putImageData(BG.mimg,0,0); }); }catch(e){}
+    BG.busy=false; }
+  // 1) Hintergrund
+  if(BG.mode==='blur'){ // günstig: klein rechnen, groß ziehen
+    const sm=BG.small.getContext('2d'); sm.filter='blur(2px)'; sm.drawImage(v,0,0,128,72);
+    o.imageSmoothingEnabled=true; o.imageSmoothingQuality='high'; o.drawImage(BG.small,2,2,124,68,0,0,W,H); }
+  else if(BG.mode==='bk'){ o.drawImage(bkBackground(W,H),0,0); }
+  else { o.fillStyle=BG_COLORS[BG.mode]||'#3b4048'; o.fillRect(0,0,W,H); }
+  // 2) Person freigestellt darüber
+  const P=BG.person; if(P.width!==W||P.height!==H){ P.width=W; P.height=H; }
+  const p=P.getContext('2d');
+  p.globalCompositeOperation='copy'; p.drawImage(v,0,0,W,H);
+  p.globalCompositeOperation='destination-in'; p.imageSmoothingEnabled=true; p.drawImage(BG.mask,0,0,W,H);
+  p.globalCompositeOperation='source-over';
+  o.drawImage(P,0,0);
+}
+function bkBackground(W,H){
+  if(BG.bkCache && BG.bkCache.width===W && BG.bkCache.height===H) return BG.bkCache;
+  const c=document.createElement('canvas'); c.width=W; c.height=H; const x=c.getContext('2d');
+  const g=x.createLinearGradient(0,0,W,H); g.addColorStop(0,'#0f1a2e'); g.addColorStop(.55,'#161b3d'); g.addColorStop(1,'#0c0f22'); x.fillStyle=g; x.fillRect(0,0,W,H);
+  const glow=(cx,cy,r,col)=>{ const rg=x.createRadialGradient(cx,cy,0,cx,cy,r); rg.addColorStop(0,col); rg.addColorStop(1,'rgba(0,0,0,0)'); x.fillStyle=rg; x.fillRect(0,0,W,H); };
+  glow(W*.18,H*.38,W*.42,'rgba(18,150,150,.42)'); glow(W*.82,H*.28,W*.38,'rgba(105,85,215,.32)');
+  // Netzwerk-Logo oben rechts
+  const s=H*.0024, ox=W-160*s-H*.07, oy=H*.08;
+  const N={tl:[40,0],tr:[120,0],ml:[0,70],c:[80,70],mr:[160,70],bl:[40,138],br:[120,138]};
+  const P=k=>[ox+N[k][0]*s, oy+N[k][1]*s];
+  x.strokeStyle='rgba(150,170,230,.55)'; x.lineWidth=Math.max(1,H*.0022);
+  [['tl','tr'],['tl','c'],['tr','c'],['ml','c'],['ml','bl'],['bl','c'],['c','mr'],['mr','br'],['br','c']].forEach(([a,b])=>{ x.beginPath(); x.moveTo(...P(a)); x.lineTo(...P(b)); x.stroke(); });
+  const dot=(k,col,r)=>{ x.fillStyle=col; x.beginPath(); x.arc(...P(k),r,0,7); x.fill(); };
+  ['tl','ml','bl'].forEach(k=>dot(k,'#8b6cf6',H*.008)); ['tr','mr','br'].forEach(k=>dot(k,'#22d3c5',H*.008)); dot('c','#22d3c5',H*.012);
+  // Schriftzug oben links
+  const fs=H*.068, lx=H*.07, ly=H*.07;
+  x.font=`800 ${fs}px Inter, system-ui, sans-serif`; x.fillStyle='#eef1f8'; x.fillText('BIOHACKING',lx,ly+fs);
+  const tg=x.createLinearGradient(lx,0,lx+fs*5.2,0); tg.addColorStop(0,'#14d6c4'); tg.addColorStop(.5,'#4aa3f0'); tg.addColorStop(1,'#8b6cf6');
+  x.fillStyle=tg; x.fillText('KOMPAKT',lx,ly+fs*2.05);
+  x.font=`600 ${H*.022}px Inter, system-ui, sans-serif`; x.fillStyle='rgba(200,210,235,.75)';
+  x.fillText('P E P T I D E  ·  L O N G E V I T Y  ·  B I O H A C K I N G',lx,ly+fs*2.05+H*.05);
+  x.fillStyle='rgba(20,214,196,.85)'; x.fillText('D E R   P O D C A S T',lx,ly+fs*2.05+H*.09);
+  BG.bkCache=c; return c;
+}
+function setBg(mode){
+  BG.mode=mode; document.querySelectorAll('.bgSel').forEach(s=>s.value=mode);
+  try{ localStorage.setItem('ps-bg',mode); }catch(e){}
+  if(mode!=='none') loadSeg();
+}
+document.querySelectorAll('.bgSel').forEach(s=>s.addEventListener('change',()=>setBg(s.value)));
+try{ const b=localStorage.getItem('ps-bg'); if(b) setBg(b); }catch(e){}
 
 /* ================= Geräte & Vorschau ================= */
 let ac, selfAnalyser;
@@ -215,15 +322,17 @@ async function listDevices(){
   const none=document.createElement('option'); none.value='none'; none.textContent='Keine Kamera (nur Audio)'; $('camSel').appendChild(none);
 }
 async function getStream(){
-  if(S.stream) S.stream.getTracks().forEach(t=>t.stop());
+  if(S.raw) S.raw.getTracks().forEach(t=>t.stop());
   const hp=$('headphones').checked;
   const cam=$('camSel').value;
   const constraints={
     audio:{ deviceId:$('micSel').value?{exact:$('micSel').value}:undefined, echoCancellation:!hp, noiseSuppression:!hp, autoGainControl:false, channelCount:1, sampleRate:48000 },
     video: cam==='none' ? false : { deviceId:cam?{exact:cam}:undefined, width:{ideal:1280}, height:{ideal:720}, frameRate:{ideal:30} }
   };
-  try{ S.stream=await navigator.mediaDevices.getUserMedia(constraints); }
-  catch(e){ constraints.video=false; S.stream=await navigator.mediaDevices.getUserMedia(constraints); log('Kamera nicht verfügbar – nur Audio.'); }
+  try{ S.raw=await navigator.mediaDevices.getUserMedia(constraints); }
+  catch(e){ constraints.video=false; S.raw=await navigator.mediaDevices.getUserMedia(constraints); log('Kamera nicht verfügbar – nur Audio.'); }
+  const vt=S.raw.getVideoTracks()[0];
+  S.stream = vt ? new MediaStream([...S.raw.getAudioTracks(), videoTrackFor(vt)]) : S.raw;
   $('previewVid').srcObject=S.stream;
   ac ||= new AudioContext();
   selfAnalyser=meterFor(S.stream,$('selfMeter'));
