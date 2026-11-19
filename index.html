@@ -47,6 +47,7 @@
   #markers li{font-size:14px;color:var(--muted)}
   #countdown{position:fixed;inset:0;display:none;align-items:center;justify-content:center;font-size:160px;font-weight:800;background:rgba(0,0,0,.55);z-index:9}
   .hidden{display:none!important}
+  #consent{position:fixed;inset:0;background:rgba(0,0,0,.72);display:flex;align-items:center;justify-content:center;z-index:10;padding:20px}
   #leftScreen{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:8;padding:20px}
   #log{font-size:13px;color:var(--muted);max-height:120px;overflow:auto;white-space:pre-wrap}
 </style>
@@ -67,6 +68,11 @@
     <h2 id="grTitle">Technik-Check</h2>
     <div class="grid2">
       <div>
+        <div id="modeRow" class="hidden"><label for="modeSel">Art der Session</label>
+        <select id="modeSel">
+          <option value="podcast">Podcast-Aufnahme (Interview)</option>
+          <option value="meeting">Team-Meeting (mit Einwilligung)</option>
+        </select></div>
         <label for="nameIn">Dein Name (erscheint in der Aufnahme)</label>
         <input type="text" id="nameIn" placeholder="z. B. Paul" maxlength="30">
         <label for="micSel">Mikrofon</label>
@@ -103,7 +109,8 @@
         <div style="flex:1;min-width:280px">
           <h2>Gast einladen</h2>
           <div class="linkbox"><input type="text" id="guestLink" readonly><button id="copyBtn">Kopieren</button></div>
-          <p class="hint">Diesen Link an deinen Gast schicken (max. 2 Gäste). Er braucht nichts zu installieren.</p>
+          <p class="hint" id="inviteHint">Diesen Link an deinen Gast schicken (max. 2 Gäste). Er braucht nichts zu installieren.</p>
+          <div id="consentList" class="hint hidden"></div>
         </div>
         <div class="row">
           <button class="rec" id="recBtn">● Aufnahme starten</button>
@@ -143,6 +150,14 @@
   </section>
 </main>
 <div id="countdown"></div>
+<div id="consent" class="hidden">
+  <div class="panel" style="max-width:540px">
+    <h2 style="font-size:20px">🔴 Dieses Meeting wird aufgezeichnet</h2>
+    <p id="consentText">Der Host möchte dieses Meeting aufzeichnen (Bild und Ton). Deine Aufnahme startet nur, wenn du zustimmst. Stimmst du nicht zu, bleibst du im Gespräch, wirst aber nicht aufgezeichnet.</p>
+    <p class="hint">Mit der Zustimmung bestätigst du, dass du mit der Aufzeichnung deines Bild- und Tonbeitrags einverstanden bist. Die Aufzeichnung liegt beim Host.</p>
+    <div class="row" style="justify-content:flex-end;margin-top:14px"><button id="consentNo">Nein, nicht aufzeichnen</button><button class="primary" id="consentYes">Ich stimme zu</button></div>
+  </div>
+</div>
 <div id="leftScreen" class="hidden">
   <div class="panel" style="max-width:520px;text-align:center">
     <h2 style="font-size:20px">Du hast das Studio verlassen</h2>
@@ -161,7 +176,9 @@ const AUDIO_BPS = 192_000;
 const VISION = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
 const SEG_MODEL = 'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite';   // genauer: erkennt Haare, Kleidung, Hände
 const SEG_FALLBACK = 'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite';
-const ICE = [{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}];
+const ICE_URL = '';   // später: Make-Webhook, der kurzlebige Cloudflare-TURN-Zugänge liefert. Leer = nur STUN.
+let ICE = [{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}];
+async function loadIce(){ if(!ICE_URL) return; try{ const r=await fetch(ICE_URL,{cache:'no-store'}); const j=await r.json(); if(Array.isArray(j.iceServers)&&j.iceServers.length){ ICE=j.iceServers; log('TURN-Zugang geladen – auch in strengen Netzen erreichbar.'); } }catch(e){ log('TURN-Zugang nicht erreichbar, nutze STUN: '+e.message); } }
 
 /* ================= Helfer ================= */
 const $ = id => document.getElementById(id);
@@ -180,6 +197,7 @@ function log(m){ const el=$('log'); el.textContent = `${new Date().toLocaleTimeS
 $('roleLabel').textContent = isHost ? 'Host · Session '+ROOM : 'Gast · Session '+ROOM;
 $('grTitle').textContent = isHost ? 'Technik-Check (Host)' : 'Willkommen! Kurzer Technik-Check';
 if(!isHost) $('hostPanel').classList.add('hidden');
+if(isHost) $('modeRow').classList.remove('hidden');
 try{ const n=localStorage.getItem('ps-name'); if(n) $('nameIn').value=n; }catch(e){}
 
 /* ================= IndexedDB (Absturzsicherung) ================= */
@@ -239,7 +257,8 @@ class Track {
 }
 
 /* ================= Zustand ================= */
-const S = { raw:null, stream:null, peer:null, conns:{}, calls:{}, names:{}, status:{}, recording:false, t0:0, session:'', who:'', tracks:[], markers:[], wake:null };
+const S = { raw:null, stream:null, kind:'podcast', consents:{}, peer:null, conns:{}, calls:{}, names:{}, status:{}, recording:false, t0:0, session:'', who:'', tracks:[], markers:[], wake:null };
+if(params.get('m')==='meeting') S.kind='meeting';
 
 /* ================= Hintergrund (Freistellung im Browser) ================= */
 const BG = { mode:'none', seg:null, loading:null, track:null, busy:false, bkCache:null,
@@ -401,14 +420,17 @@ function meterFor(stream, el){
 ['micSel','camSel','headphones'].forEach(id=>$(id).addEventListener('change',()=>getStream()));
 
 /* ================= Verbindung (PeerJS / WebRTC) ================= */
-$('joinBtn').onclick=()=>{
+$('joinBtn').onclick=async()=>{
   const name=$('nameIn').value.trim(); if(!name){ $('nameIn').focus(); return; }
   try{ localStorage.setItem('ps-name',name); }catch(e){}
+  if(isHost) S.kind=$('modeSel').value;
   S.who=slug(name)+(isHost?'':'-'+myId.slice(-3)); S.names[myId]=name;
+  applyKind();
   ac?.resume?.();
   $('greenroom').classList.add('hidden'); $('studio').classList.remove('hidden');
   addTile(myId,name,S.stream,true);
-  $('guestLink').value=location.origin+location.pathname+'?r='+ROOM;
+  $('guestLink').value=guestUrl();
+  await loadIce();
   S.peer=new Peer(myId,{config:{iceServers:ICE}});
   S.peer.on('open',()=>{ log('Mit Signalserver verbunden.'); if(!isHost) connectTo(`bkps-${ROOM}-host`); });
   S.peer.on('error',e=>{ log('Verbindungsfehler: '+e.type); if(e.type==='unavailable-id' && isHost) alert('Diese Session ist schon offen (anderes Fenster?).'); if(e.type==='peer-unavailable' && !isHost) notice('Der Host ist noch nicht im Studio (oder der Link ist veraltet). Es wird automatisch weiter versucht …'), setTimeout(()=>connectTo(`bkps-${ROOM}-host`),5000); });
@@ -422,7 +444,7 @@ function setupConn(c,incoming=true){
   c.on('open',()=>{ log(`Datenkanal zu ${S.names[c.peer]||c.peer} offen.`);
     if(isHost){ // neuen Gast über die anderen informieren
       if(Object.keys(S.conns).length>2){ c.send({t:'full'}); setTimeout(()=>c.close(),500); return; }
-      c.send({t:'roster', peers:Object.keys(S.conns).filter(p=>p!==c.peer), names:S.names, recording:S.recording, session:S.session, t0:S.t0});
+      c.send({t:'roster', peers:Object.keys(S.conns).filter(p=>p!==c.peer), names:S.names, recording:S.recording, session:S.session, t0:S.t0, kind:S.kind});
     }
     c.send({t:'hello',name:S.names[myId]}); });
   c.on('data',d=>onData(c.peer,d));
@@ -441,11 +463,13 @@ function broadcast(msg){ Object.values(S.conns).forEach(c=>{ if(c.open) c.send(m
 function onData(from,d){
   switch(d.t){
     case 'hello': S.names[from]=d.name; const tl=document.querySelector(`[data-peer="${from}"] .name`); if(tl) tl.textContent=d.name; break;
-    case 'roster': Object.assign(S.names,d.names); d.peers.forEach(p=>connectTo(p)); if(d.recording) startRec(d.session,d.t0,false); break;
+    case 'roster': Object.assign(S.names,d.names); if(d.kind){ S.kind=d.kind; applyKind(); } d.peers.forEach(p=>connectTo(p)); if(d.recording) startRec(d.session,d.t0,false); break;
     case 'bye': S.calls[from]?.close(); delete S.calls[from]; removeTile(from); log(`${S.names[from]||'Teilnehmer'} hat das Studio verlassen.`); break;
     case 'full': alert('Das Studio ist voll (max. 3 Personen).'); break;
     case 'rec-start': startRec(d.session,d.t0,true); break;
     case 'rec-stop': stopRec(); break;
+    case 'consent-req': showConsent(d.session,d.t0); break;
+    case 'consent': S.consents[from]={name:S.names[from]||d.name,ok:d.ok}; renderConsents(); break;
     case 'marker': addMarker(d.m,false); break;
     case 'status': S.status[from]=d; renderStatus(); break;
   }
@@ -469,6 +493,13 @@ $('recBtn').onclick=async()=>{
   if(!S.recording){
     if(Object.keys(S.conns).length===0 && !confirm('Noch kein Gast verbunden. Trotzdem starten?')) return;
     const d=new Date(); const session=`${d.getFullYear()}-${pad(d.getMonth()+1,2)}-${pad(d.getDate(),2)}_${pad(d.getHours(),2)}${pad(d.getMinutes(),2)}_${ROOM}`;
+    if(S.kind==='meeting'){
+      const t0=Date.now(); S.consents={};
+      broadcast({t:'consent-req',session,t0});
+      $('consentList').classList.remove('hidden'); renderConsents();
+      showConsent(session,t0);        // Host stimmt für sich selbst zu
+      return;
+    }
     await countdown(); const t0=Date.now();
     broadcast({t:'rec-start',session,t0}); startRec(session,t0,false);
   } else {
@@ -510,6 +541,50 @@ async function stopRec(){
 }
 
 $('copyBtn').onclick=()=>{ navigator.clipboard.writeText($('guestLink').value).then(()=>{ $('copyBtn').textContent='Kopiert ✓'; setTimeout(()=>$('copyBtn').textContent='Kopieren',1500); }); };
+
+/* ================= Meeting-Modus & Einwilligung ================= */
+function applyKind(){
+  const meet=S.kind==='meeting';
+  document.title = meet?'Team-Meeting':'Podcast-Studio';
+  $('roleLabel').textContent = (isHost?'Host':'Gast')+' · '+(meet?'Meeting':'Session')+' '+ROOM;
+  const h=document.querySelector('header h1'); if(h) h.textContent = meet?'👥 Team-Meeting':'🎙️ Podcast-Studio';
+  const ht=document.querySelector('#hostPanel h2'); if(ht) ht.textContent = meet?'Teilnehmer einladen':'Gast einladen';
+  $('inviteHint').textContent = meet
+    ? 'Diesen Link an deine Teilnehmer schicken (max. 2 weitere). Jeder stimmt der Aufzeichnung selbst zu.'
+    : 'Diesen Link an deinen Gast schicken (max. 2 Gäste). Er braucht nichts zu installieren.';
+  $('recBtn').textContent = meet?'● Aufzeichnung starten':'● Aufnahme starten';
+}
+// Gast-Einladungslink trägt die Session-Art
+function guestUrl(){ return location.origin+location.pathname+'?r='+ROOM+(S.kind==='meeting'?'&m=meeting':''); }
+let consentPending=null;
+function showConsent(session,t0){
+  consentPending={session,t0};
+  $('consentText').textContent = isHost
+    ? 'Du zeichnest dieses Meeting auf. Deine eigene Spur startet mit deiner Zustimmung. Jeder Teilnehmer stimmt für sich selbst zu.'
+    : 'Der Host möchte dieses Meeting aufzeichnen (Bild und Ton). Deine Aufnahme startet nur, wenn du zustimmst. Stimmst du nicht zu, bleibst du im Gespräch, wirst aber nicht aufgezeichnet.';
+  $('consent').classList.remove('hidden');
+}
+$('consentYes').onclick=()=>{
+  $('consent').classList.add('hidden');
+  const c=consentPending; consentPending=null; if(!c) return;
+  broadcast({t:'consent',name:S.names[myId],ok:true});
+  S.consents[myId]={name:S.names[myId],ok:true}; renderConsents();
+  startRec(c.session,c.t0,false);
+};
+$('consentNo').onclick=()=>{
+  $('consent').classList.add('hidden'); consentPending=null;
+  broadcast({t:'consent',name:S.names[myId],ok:false});
+  S.consents[myId]={name:S.names[myId],ok:false}; renderConsents();
+  notice('Du nimmst teil, wirst aber nicht aufgezeichnet.');
+};
+function renderConsents(){
+  if(S.kind!=='meeting'){ $('consentList').classList.add('hidden'); return; }
+  const ids=[myId,...Object.keys(S.conns)];
+  const rows=ids.map(id=>{ const c=S.consents[id]; const n=S.names[id]||'…';
+    const s=!c?'<span class="wait">wartet…</span>':c.ok?'<span class="ok">stimmt zu ✓</span>':'<span class="bad">keine Aufzeichnung</span>';
+    return n+': '+s; });
+  const el=$('consentList'); el.classList.remove('hidden'); el.innerHTML='Aufzeichnungs-Einwilligung<br>'+rows.join('<br>');
+}
 
 /* ================= Studio verlassen ================= */
 $('leaveBtn').onclick=async()=>{
