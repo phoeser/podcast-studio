@@ -94,6 +94,12 @@
           <input type="checkbox" id="headphones" checked> Ich trage Kopfhörer (empfohlen – dann klingt die Aufnahme deutlich besser)
         </label>
         <p class="hint">Tipp: ruhiger Raum, Mikro ca. eine Handbreit vom Mund, Benachrichtigungen aus. Bitte Chrome oder Edge am Computer verwenden.</p>
+        <div id="invitePre" class="hidden" style="margin-top:14px;padding-top:14px;border-top:1px solid var(--line)">
+          <label style="margin-top:0">Einladungslink – schon jetzt verschicken</label>
+          <div class="linkbox"><input type="text" id="preLink" readonly><button id="preCopy">Kopieren</button></div>
+          <div class="row" style="margin-top:8px"><button class="primary" id="preMail">✉️ Per E-Mail einladen</button><button id="preNew">Neuer Code</button></div>
+          <p class="hint">Session-Code: <b id="preCode"></b> · Schick den Link vorab an deine Teilnehmer. Der Code bleibt gleich, bis du „Neuer Code“ drückst – du kannst die App also schließen und den Call später starten.</p>
+        </div>
         <div class="row" style="margin-top:12px">
           <button class="primary" id="joinBtn">Studio betreten</button>
         </div>
@@ -108,7 +114,7 @@
       <div class="row" style="justify-content:space-between">
         <div style="flex:1;min-width:280px">
           <h2>Gast einladen</h2>
-          <div class="linkbox"><input type="text" id="guestLink" readonly><button id="copyBtn">Kopieren</button></div>
+          <div class="linkbox"><input type="text" id="guestLink" readonly><button id="copyBtn">Kopieren</button><button id="mailBtn">✉️ E-Mail</button></div>
           <p class="hint" id="inviteHint">Diesen Link an deinen Gast schicken (max. 2 Gäste). Er braucht nichts zu installieren.</p>
           <div id="consentList" class="hint hidden"></div>
         </div>
@@ -187,8 +193,10 @@ const $ = id => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const room = params.get('r');
 const isHost = !room;
-const ROOM = room || Math.random().toString(36).slice(2,8);
-const myId = isHost ? `bkps-${ROOM}-host` : `bkps-${ROOM}-${Math.random().toString(36).slice(2,7)}`;
+let ROOM;
+if(room){ ROOM = room; }
+else { try{ ROOM = localStorage.getItem('ps-active-room')||''; }catch(e){} if(!ROOM){ ROOM = Math.random().toString(36).slice(2,8); try{ localStorage.setItem('ps-active-room',ROOM); }catch(e){} } }
+let myId = isHost ? `bkps-${ROOM}-host` : `bkps-${ROOM}-${Math.random().toString(36).slice(2,7)}`;
 const slug = s => (s||'gast').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,20)||'gast';
 const pad = (n,l=4)=>String(n).padStart(l,'0');
 const fmtT = ms => { const s=Math.floor(ms/1000); return `${pad(Math.floor(s/3600),2)}:${pad(Math.floor(s/60)%60,2)}:${pad(s%60,2)}`; };
@@ -200,6 +208,21 @@ $('roleLabel').textContent = isHost ? 'Host · Session '+ROOM : 'Gast · Session
 $('grTitle').textContent = isHost ? 'Technik-Check (Host)' : 'Willkommen! Kurzer Technik-Check';
 if(!isHost) $('hostPanel').classList.add('hidden');
 if(isHost) $('modeRow').classList.remove('hidden');
+/* ---- Einladungslink schon vor dem Betreten ---- */
+function inviteUrl(){ const meet = isHost ? ($('modeSel')?.value==='meeting') : (S.kind==='meeting'); return location.origin+location.pathname+'?r='+ROOM+(meet?'&m=meeting':''); }
+function refreshInvite(){ if(!isHost) return; const p=$('preLink'); if(p) p.value=inviteUrl(); const c=$('preCode'); if(c) c.textContent=ROOM; }
+function mailInvite(){ const meet=inviteUrl().includes('m=meeting');
+  const subj=meet?'Einladung zum Team-Meeting':'Einladung zur Podcast-Aufnahme';
+  const body=(meet?'Hallo,\n\nich lade dich zu einem Online-Meeting ein. Klick zum vereinbarten Zeitpunkt einfach auf diesen Link (am besten Chrome oder Edge am Computer):'
+                  :'Hallo,\n\nich lade dich zu einer Podcast-Aufnahme ein. Klick zum vereinbarten Zeitpunkt einfach auf diesen Link (am besten Chrome oder Edge am Computer):')
+    +'\n\n'+inviteUrl()+'\n\nDu musst nichts installieren.\n\nViele Grüße';
+  location.href='mailto:?subject='+encodeURIComponent(subj)+'&body='+encodeURIComponent(body); }
+if(isHost){ $('invitePre').classList.remove('hidden'); refreshInvite();
+  $('modeSel').addEventListener('change',refreshInvite);
+  $('preCopy').onclick=()=>{ navigator.clipboard.writeText($('preLink').value).then(()=>{ $('preCopy').textContent='Kopiert ✓'; setTimeout(()=>$('preCopy').textContent='Kopieren',1500); }); };
+  $('preMail').onclick=mailInvite;
+  $('preNew').onclick=()=>{ ROOM=Math.random().toString(36).slice(2,8); try{ localStorage.setItem('ps-active-room',ROOM); }catch(e){} myId='bkps-'+ROOM+'-host'; $('roleLabel').textContent='Host · '+($('modeSel')?.value==='meeting'?'Meeting ':'Session ')+ROOM; refreshInvite(); };
+}
 try{ const n=localStorage.getItem('ps-name'); if(n) $('nameIn').value=n; }catch(e){}
 
 /* ================= IndexedDB (Absturzsicherung) ================= */
@@ -546,6 +569,7 @@ async function stopRec(){
 }
 
 $('copyBtn').onclick=()=>{ navigator.clipboard.writeText($('guestLink').value).then(()=>{ $('copyBtn').textContent='Kopiert ✓'; setTimeout(()=>$('copyBtn').textContent='Kopieren',1500); }); };
+$('mailBtn').onclick=mailInvite;
 
 /* ================= Meeting-Modus & Einwilligung ================= */
 function applyKind(){
