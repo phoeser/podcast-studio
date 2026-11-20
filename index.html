@@ -169,6 +169,8 @@
 <script>
 /* ================= Konfiguration ================= */
 const UPLOAD_URL = 'https://hook.eu2.make.com/kvwsz19q0p0iqdtlbna0xo5vq6g30lqp';
+const MEETING_UPLOAD_URL = 'https://hook.eu2.make.com/yjdg65c5cy574iaohc4oxtxkgjgp53uv';
+const uploadUrl = () => (typeof S!=='undefined' && S && S.kind==='meeting') ? MEETING_UPLOAD_URL : UPLOAD_URL;
 const CHUNK_MAX = 3.3 * 1024 * 1024;      // Make-Webhook-Limit 5 MB inkl. Overhead
 const AUDIO_CHUNK_SEC = 60;               // Audio spätestens jede Minute hochladen
 const VIDEO_BPS = 2_000_000;              // 720p, ca. 0,9 GB pro Stunde
@@ -176,9 +178,9 @@ const AUDIO_BPS = 192_000;
 const VISION = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
 const SEG_MODEL = 'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite';   // genauer: erkennt Haare, Kleidung, Hände
 const SEG_FALLBACK = 'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite';
-const ICE_URL = '';   // später: Make-Webhook, der kurzlebige Cloudflare-TURN-Zugänge liefert. Leer = nur STUN.
+const ICE_URL = 'https://hook.eu2.make.com/y63dpmbosbinmsrw1fv6iahydgx10xv7';   // Make-Webhook, der kurzlebige Cloudflare-TURN-Zugänge liefert. Leer = nur STUN.
 let ICE = [{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}];
-async function loadIce(){ if(!ICE_URL) return; try{ const r=await fetch(ICE_URL,{cache:'no-store'}); const j=await r.json(); if(Array.isArray(j.iceServers)&&j.iceServers.length){ ICE=j.iceServers; log('TURN-Zugang geladen – auch in strengen Netzen erreichbar.'); } }catch(e){ log('TURN-Zugang nicht erreichbar, nutze STUN: '+e.message); } }
+async function loadIce(){ if(!ICE_URL) return; try{ const r=await fetch(ICE_URL,{cache:'no-store'}); const j=await r.json(); const valid=Array.isArray(j.iceServers)?j.iceServers.filter(s=>s&&s.urls):[]; if(valid.length){ ICE=valid; log('TURN-Zugang geladen – auch in strengen Netzen erreichbar.'); } }catch(e){ log('TURN-Zugang nicht erreichbar, nutze STUN: '+e.message); } }
 
 /* ================= Helfer ================= */
 const $ = id => document.getElementById(id);
@@ -223,7 +225,7 @@ const Up = { queue:[], busy:false, done:0, bytes:0,
       while(!ok){
         try{
           const fd=new FormData(); fd.append('name',it.name); fd.append('file',it.blob,it.name);
-          const r=await fetch(UPLOAD_URL,{method:'POST',body:fd});
+          const r=await fetch(uploadUrl(),{method:'POST',body:fd});
           if(!r.ok) throw new Error('HTTP '+r.status);
           ok=true;
         }catch(e){ log(`Upload ${it.name} fehlgeschlagen (${e.message}) – neuer Versuch in ${wait/1000}s`); await new Promise(r=>setTimeout(r,wait)); wait=Math.min(wait*2,30000); }
@@ -375,7 +377,7 @@ function setBg(mode){
   if(mode!=='none') loadSeg();
 }
 document.querySelectorAll('.bgSel').forEach(s=>s.addEventListener('change',()=>setBg(s.value)));
-if(MOBILE) notice('Das Podcast-Studio ist für den Computer gedacht. Bitte öffne diesen Link am Laptop oder PC in Chrome oder Edge – am Handy klappt die Verbindung nicht zuverlässig.');
+if(MOBILE) notice('Tipp: Am Computer (Chrome oder Edge) läuft die Aufnahme am stabilsten. Am Handy kannst du ebenfalls teilnehmen – der Hintergrund-Filter ist dort aber nicht verfügbar.');
 if(MOBILE){ document.querySelectorAll('.bgSel').forEach(s=>{ s.disabled=true; s.options[0].textContent='Am Handy nicht verfügbar'; }); }
 else try{ const b=localStorage.getItem('ps-bg'); if(b) setBg(b); }catch(e){}
 
