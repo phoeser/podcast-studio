@@ -129,7 +129,7 @@
         <option value="bk">Biohacking Kompakt</option>
       </select>
       <span class="hint" style="flex:1;min-width:200px">Der Effekt ist auch in der Aufnahme. Dieses Fenster während der Aufnahme bitte im Vordergrund lassen.</span>
-      <button id="leaveBtn">⎋ Studio verlassen</button>
+      <button id="shareBtn">🖥️ Bildschirm teilen</button><button id="leaveBtn">⎋ Studio verlassen</button>
     </div>
     <div class="tiles" id="tiles"></div>
 
@@ -259,6 +259,7 @@ class Track {
 /* ================= Zustand ================= */
 const S = { raw:null, stream:null, kind:'podcast', consents:{}, peer:null, conns:{}, calls:{}, names:{}, status:{}, recording:false, t0:0, session:'', who:'', tracks:[], markers:[], wake:null };
 if(params.get('m')==='meeting') S.kind='meeting';
+if(S.kind==='meeting'){ const _ms=document.getElementById('modeSel'); if(_ms) _ms.value='meeting'; applyKind(); }
 
 /* ================= Hintergrund (Freistellung im Browser) ================= */
 const BG = { mode:'none', seg:null, loading:null, track:null, busy:false, bkCache:null,
@@ -391,7 +392,7 @@ async function getStream(){
   const hp=$('headphones').checked;
   const cam=$('camSel').value;
   const constraints={
-    audio:{ deviceId:$('micSel').value?{exact:$('micSel').value}:undefined, echoCancellation:!hp, noiseSuppression:!hp, autoGainControl:false, channelCount:1, sampleRate:48000 },
+    audio:{ deviceId:$('micSel').value?{exact:$('micSel').value}:undefined, echoCancellation:(S.kind==='meeting')?true:!hp, noiseSuppression:(S.kind==='meeting')?true:!hp, autoGainControl:(S.kind==='meeting'), channelCount:1, sampleRate:48000 },
     video: cam==='none' ? false : { deviceId:cam?{exact:cam}:undefined, width:{ideal:1280}, height:{ideal:720}, frameRate:{ideal:30} }
   };
   try{ S.raw=await navigator.mediaDevices.getUserMedia(constraints); }
@@ -435,7 +436,7 @@ $('joinBtn').onclick=async()=>{
   S.peer.on('open',()=>{ log('Mit Signalserver verbunden.'); if(!isHost) connectTo(`bkps-${ROOM}-host`); });
   S.peer.on('error',e=>{ log('Verbindungsfehler: '+e.type); if(e.type==='unavailable-id' && isHost) alert('Diese Session ist schon offen (anderes Fenster?).'); if(e.type==='peer-unavailable' && !isHost) notice('Der Host ist noch nicht im Studio (oder der Link ist veraltet). Es wird automatisch weiter versucht …'), setTimeout(()=>connectTo(`bkps-${ROOM}-host`),5000); });
   S.peer.on('connection',c=>setupConn(c));
-  S.peer.on('call',call=>{ call.answer(S.stream); setupCall(call); });
+  S.peer.on('call',call=>{ if(call.metadata?.type==='screen'){ call.answer(); call.on('stream',st=>addTile('screen-'+call.peer,'🖥️ '+(call.metadata.name||S.names[call.peer]||'Bildschirm'),st,false)); call.on('close',()=>removeTile('screen-'+call.peer)); return; } call.answer(S.stream); setupCall(call); });
   setInterval(sendStatus,2000); renderStatus();
 };
 function connectTo(id){ if(S.conns[id]||id===myId||S.left) return; const c=S.peer.connect(id,{reliable:true,metadata:{name:S.names[myId]}}); setupConn(c,false); const call=S.peer.call(id,S.stream,{metadata:{name:S.names[myId]}}); setupCall(call,false); }
@@ -446,7 +447,7 @@ function setupConn(c,incoming=true){
       if(Object.keys(S.conns).length>2){ c.send({t:'full'}); setTimeout(()=>c.close(),500); return; }
       c.send({t:'roster', peers:Object.keys(S.conns).filter(p=>p!==c.peer), names:S.names, recording:S.recording, session:S.session, t0:S.t0, kind:S.kind});
     }
-    c.send({t:'hello',name:S.names[myId]}); });
+    c.send({t:'hello',name:S.names[myId]}); if(screenStream) callScreen(c.peer); });
   c.on('data',d=>onData(c.peer,d));
   c.on('close',()=>{ log(`${S.names[c.peer]||c.peer} hat die Verbindung getrennt.`); delete S.conns[c.peer]; removeTile(c.peer); renderStatus(); });
 }
@@ -470,6 +471,8 @@ function onData(from,d){
     case 'rec-stop': stopRec(); break;
     case 'consent-req': showConsent(d.session,d.t0); break;
     case 'consent': S.consents[from]={name:S.names[from]||d.name,ok:d.ok}; renderConsents(); break;
+    case 'screen-on': log((S.names[from]||'Teilnehmer')+' teilt den Bildschirm.'); break;
+    case 'screen-off': removeTile('screen-'+from); break;
     case 'marker': addMarker(d.m,false); break;
     case 'status': S.status[from]=d; renderStatus(); break;
   }
@@ -586,6 +589,26 @@ function renderConsents(){
   const el=$('consentList'); el.classList.remove('hidden'); el.innerHTML='Aufzeichnungs-Einwilligung<br>'+rows.join('<br>');
 }
 
+/* ================= Bildschirm teilen ================= */
+let screenStream=null, screenCalls={};
+$('shareBtn').onclick=async()=>{
+  if(screenStream){ stopShare(); return; }
+  try{ screenStream=await navigator.mediaDevices.getDisplayMedia({video:{frameRate:15},audio:false}); }
+  catch(e){ return; }
+  screenStream.getVideoTracks()[0].addEventListener('ended',stopShare);
+  addTile('screen-'+myId,'🖥️ '+(S.names[myId]||'Bildschirm'),screenStream,true);
+  $('shareBtn').textContent='🖥️ Teilen beenden';
+  Object.keys(S.conns).forEach(callScreen);
+  broadcast({t:'screen-on',name:S.names[myId]});
+};
+function callScreen(id){ if(!screenStream||!S.peer) return; try{ screenCalls[id]=S.peer.call(id,screenStream,{metadata:{type:'screen',name:S.names[myId]}}); }catch(e){} }
+function stopShare(){ if(!screenStream) return;
+  screenStream.getTracks().forEach(t=>t.stop()); screenStream=null;
+  Object.values(screenCalls).forEach(c=>{try{c.close()}catch(e){}}); screenCalls={};
+  removeTile('screen-'+myId); const b=$('shareBtn'); if(b) b.textContent='🖥️ Bildschirm teilen';
+  broadcast({t:'screen-off',id:myId});
+}
+
 /* ================= Studio verlassen ================= */
 $('leaveBtn').onclick=async()=>{
   if(S.recording){
@@ -593,7 +616,7 @@ $('leaveBtn').onclick=async()=>{
     if(isHost) broadcast({t:'rec-stop'});
     await stopRec();
   }
-  S.left=true; broadcast({t:'bye'});
+  stopShare(); S.left=true; broadcast({t:'bye'});
   Object.values(S.calls).forEach(c=>{ try{ c.close(); }catch(e){} }); S.calls={};
   S.raw?.getTracks().forEach(t=>t.stop());                       // Kamera und Mikro aus
   $('studio').classList.add('hidden'); $('leftScreen').classList.remove('hidden');
