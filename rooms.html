@@ -1,0 +1,720 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Podcast-Studio</title>
+<meta name="robots" content="noindex">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎙️</text></svg>">
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<style>
+  :root{--bg:#0f1115;--panel:#181b22;--line:#2a2f3a;--text:#eef1f6;--muted:#9aa3b2;--acc:#2ec4a0;--rec:#e5484d;--warn:#f5a524}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  header{display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--line)}
+  header h1{font-size:18px;margin:0;font-weight:650}
+  header .sub{color:var(--muted);font-size:14px}
+  main{max-width:1200px;margin:0 auto;padding:20px}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px;margin-bottom:16px}
+  h2{font-size:16px;margin:0 0 12px}
+  label{display:block;font-size:14px;color:var(--muted);margin:10px 0 4px}
+  input[type=text],select{width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:#0c0e12;color:var(--text);font-size:15px}
+  button{font:inherit;font-size:15px;padding:10px 16px;border-radius:10px;border:1px solid var(--line);background:#232835;color:var(--text);cursor:pointer}
+  button:hover{border-color:#3a4150}
+  button.primary{background:var(--acc);border-color:var(--acc);color:#04140f;font-weight:650}
+  button.rec{background:var(--rec);border-color:var(--rec);color:#fff;font-weight:650}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:800px){.grid2{grid-template-columns:1fr}}
+  .meter{height:12px;background:#0c0e12;border-radius:6px;overflow:hidden;border:1px solid var(--line)}
+  .meter>div{height:100%;width:0;background:linear-gradient(90deg,var(--acc),var(--warn) 75%,var(--rec));transition:width .06s}
+  video{width:100%;border-radius:12px;background:#000;aspect-ratio:16/9;object-fit:cover}
+  .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px}
+  .tile{position:relative}
+  .tile .name{position:absolute;left:10px;bottom:10px;background:rgba(0,0,0,.6);padding:3px 10px;border-radius:8px;font-size:14px}
+  .tile .lvl{position:absolute;right:10px;bottom:12px;width:70px}
+  .hint{color:var(--muted);font-size:14px}
+  .linkbox{display:flex;gap:8px}
+  .linkbox input{flex:1}
+  .badge{display:inline-block;padding:3px 10px;border-radius:999px;font-size:13px;border:1px solid var(--line);color:var(--muted)}
+  .badge.live{background:var(--rec);border-color:var(--rec);color:#fff;animation:pulse 1.4s infinite}
+  @keyframes pulse{50%{opacity:.6}}
+  #timer{font-variant-numeric:tabular-nums;font-size:22px;font-weight:650}
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  td,th{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left}
+  .ok{color:var(--acc)} .bad{color:var(--rec)} .wait{color:var(--warn)}
+  #markers li{font-size:14px;color:var(--muted)}
+  #countdown{position:fixed;inset:0;display:none;align-items:center;justify-content:center;font-size:160px;font-weight:800;background:rgba(0,0,0,.55);z-index:9}
+  .hidden{display:none!important}
+  #consent{position:fixed;inset:0;background:rgba(0,0,0,.72);display:flex;align-items:center;justify-content:center;z-index:10;padding:20px}
+  #leftScreen{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:8;padding:20px}
+  #log{font-size:13px;color:var(--muted);max-height:120px;overflow:auto;white-space:pre-wrap}
+</style>
+</head>
+<body>
+<header>
+  <h1>🎙️ Podcast-Studio</h1>
+  <span class="sub" id="roleLabel"></span>
+  <span style="flex:1"></span>
+  <span class="badge" id="recBadge">bereit</span>
+  <span id="timer">00:00:00</span>
+</header>
+
+<main>
+  <div id="notice" class="panel hidden" style="border-color:var(--warn);color:var(--warn)"></div>
+  <!-- STEP 1: Green Room -->
+  <section class="panel" id="greenroom">
+    <h2 id="grTitle">Technik-Check</h2>
+    <div class="grid2">
+      <div>
+        <div id="modeRow" class="hidden"><label for="modeSel">Art der Session</label>
+        <select id="modeSel">
+          <option value="podcast">Podcast-Aufnahme (Interview)</option>
+          <option value="meeting">Team-Meeting (mit Einwilligung)</option>
+        </select></div>
+        <label for="nameIn">Dein Name (erscheint in der Aufnahme)</label>
+        <input type="text" id="nameIn" placeholder="z. B. Paul" maxlength="30">
+        <label for="micSel">Mikrofon</label>
+        <select id="micSel"></select>
+        <label for="camSel">Kamera</label>
+        <select id="camSel"></select>
+        <label for="bgSel">Hintergrund</label>
+        <select id="bgSel" class="bgSel">
+          <option value="none">Original (kein Effekt)</option>
+          <option value="blur">Weichzeichnen</option>
+          <option value="grau">Neutral – Grau</option>
+          <option value="hell">Neutral – Hell</option>
+          <option value="gruen">Neutral – Dunkelgrün</option>
+          <option value="bk">Biohacking Kompakt</option>
+        </select>
+        <label>Pegel – sprich normal, der Balken sollte bis etwa ¾ gehen</label>
+        <div class="meter"><div id="selfMeter"></div></div>
+        <label style="display:flex;gap:8px;align-items:center;color:var(--text);margin-top:14px">
+          <input type="checkbox" id="headphones" checked> Ich trage Kopfhörer (empfohlen – dann klingt die Aufnahme deutlich besser)
+        </label>
+        <p class="hint">Tipp: ruhiger Raum, Mikro ca. eine Handbreit vom Mund, Benachrichtigungen aus. Bitte Chrome oder Edge am Computer verwenden.</p>
+        <div id="invitePre" class="hidden" style="margin-top:14px;padding-top:14px;border-top:1px solid var(--line)">
+          <label style="margin-top:0">Einladungslink – schon jetzt verschicken</label>
+          <div class="linkbox"><input type="text" id="preLink" readonly><button id="preCopy">Kopieren</button></div>
+          <div class="row" style="margin-top:8px"><button class="primary" id="preMail">✉️ Per E-Mail einladen</button><button id="preNew">Neuer Code</button></div>
+          <p class="hint">Session-Code: <b id="preCode"></b> · Schick den Link vorab an deine Teilnehmer. Der Code bleibt gleich, bis du „Neuer Code“ drückst – du kannst die App also schließen und den Call später starten.</p>
+        </div>
+        <div class="row" style="margin-top:12px">
+          <button class="primary" id="joinBtn">Studio betreten</button>
+        </div>
+      </div>
+      <div><video id="previewVid" autoplay muted playsinline></video></div>
+    </div>
+  </section>
+
+  <!-- STEP 2: Studio -->
+  <section id="studio" class="hidden">
+    <div class="panel" id="hostPanel">
+      <div class="row" style="justify-content:space-between">
+        <div style="flex:1;min-width:280px">
+          <h2>Gast einladen</h2>
+          <div class="linkbox"><input type="text" id="guestLink" readonly><button id="copyBtn">Kopieren</button><button id="mailBtn">✉️ E-Mail</button></div>
+          <p class="hint" id="inviteHint">Diesen Link an deinen Gast schicken (max. 2 Gäste). Er braucht nichts zu installieren.</p>
+          <div id="consentList" class="hint hidden"></div>
+        </div>
+        <div class="row">
+          <button class="rec" id="recBtn">● Aufnahme starten</button>
+          <button id="markBtn" disabled>⚑ Marker (M)</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="row" style="margin-bottom:12px"><label for="bgSel2" style="margin:0;color:var(--text)">Mein Hintergrund:</label>
+      <select id="bgSel2" class="bgSel" style="width:auto">
+        <option value="none">Original (kein Effekt)</option>
+        <option value="blur">Weichzeichnen</option>
+        <option value="grau">Neutral – Grau</option>
+        <option value="hell">Neutral – Hell</option>
+        <option value="gruen">Neutral – Dunkelgrün</option>
+        <option value="bk">Biohacking Kompakt</option>
+      </select>
+      <span class="hint" style="flex:1;min-width:200px">Der Effekt ist auch in der Aufnahme. Dieses Fenster während der Aufnahme bitte im Vordergrund lassen.</span>
+      <button id="shareBtn">🖥️ Bildschirm teilen</button><button id="leaveBtn">⎋ Studio verlassen</button>
+    </div>
+    <div class="tiles" id="tiles"></div>
+
+    <div class="grid2" style="margin-top:16px">
+      <div class="panel">
+        <h2>Upload-Status</h2>
+        <table><thead><tr><th>Teilnehmer</th><th>Verbindung</th><th>Hochgeladen</th><th>Warteschlange</th></tr></thead><tbody id="statusBody"></tbody></table>
+        <p class="hint">Jede Person wird bei sich lokal in voller Qualität aufgenommen und läuft parallel nach Google Drive hoch. Erst Fenster schließen, wenn die Warteschlange bei allen 0 ist.</p>
+        <div class="row"><button id="backupBtn">Lokale Sicherung herunterladen</button></div>
+      </div>
+      <div class="panel">
+        <h2>Marker</h2>
+        <div class="row"><input type="text" id="markLabel" placeholder="Notiz zum Marker (optional), z. B. „Versprecher“ oder „Highlight“" style="flex:1"></div>
+        <ul id="markers"></ul>
+        <div id="log"></div>
+      </div>
+    </div>
+  </section>
+</main>
+<div id="countdown"></div>
+<div id="consent" class="hidden">
+  <div class="panel" style="max-width:540px">
+    <h2 style="font-size:20px">🔴 Dieses Meeting wird aufgezeichnet</h2>
+    <p id="consentText">Der Host möchte dieses Meeting aufzeichnen (Bild und Ton). Deine Aufnahme startet nur, wenn du zustimmst. Stimmst du nicht zu, bleibst du im Gespräch, wirst aber nicht aufgezeichnet.</p>
+    <p class="hint">Mit der Zustimmung bestätigst du, dass du mit der Aufzeichnung deines Bild- und Tonbeitrags einverstanden bist. Die Aufzeichnung liegt beim Host.</p>
+    <div class="row" style="justify-content:flex-end;margin-top:14px"><button id="consentNo">Nein, nicht aufzeichnen</button><button class="primary" id="consentYes">Ich stimme zu</button></div>
+  </div>
+</div>
+<div id="leftScreen" class="hidden">
+  <div class="panel" style="max-width:520px;text-align:center">
+    <h2 style="font-size:20px">Du hast das Studio verlassen</h2>
+    <p id="leftMsg" class="wait">Deine Aufnahme wird noch hochgeladen – bitte dieses Fenster offen lassen.</p>
+    <div class="row" style="justify-content:center;margin-top:14px"><button id="backupBtn2">Lokale Sicherung herunterladen</button><button class="primary" id="rejoinBtn"></button></div>
+  </div>
+</div>
+
+<script>
+/* ================= Konfiguration ================= */
+const UPLOAD_URL = 'https://hook.eu2.make.com/kvwsz19q0p0iqdtlbna0xo5vq6g30lqp';
+const MEETING_UPLOAD_URL = 'https://hook.eu2.make.com/yjdg65c5cy574iaohc4oxtxkgjgp53uv';
+const uploadUrl = () => (typeof S!=='undefined' && S && S.kind==='meeting') ? MEETING_UPLOAD_URL : UPLOAD_URL;
+const CHUNK_MAX = 3.3 * 1024 * 1024;      // Make-Webhook-Limit 5 MB inkl. Overhead
+const AUDIO_CHUNK_SEC = 60;               // Audio spätestens jede Minute hochladen
+const VIDEO_BPS = 2_000_000;              // 720p, ca. 0,9 GB pro Stunde
+const AUDIO_BPS = 192_000;
+const VISION = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
+const SEG_MODEL = 'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite';   // genauer: erkennt Haare, Kleidung, Hände
+const SEG_FALLBACK = 'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter/float16/latest/selfie_segmenter.tflite';
+const ICE_URL = 'https://hook.eu2.make.com/y63dpmbosbinmsrw1fv6iahydgx10xv7';   // Make-Webhook, der kurzlebige Cloudflare-TURN-Zugänge liefert. Leer = nur STUN.
+let ICE = [{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}];
+async function loadIce(){ if(!ICE_URL) return; try{ const r=await fetch(ICE_URL,{cache:'no-store'}); const j=await r.json(); const valid=Array.isArray(j.iceServers)?j.iceServers.filter(s=>s&&s.urls):[]; if(valid.length){ ICE=valid; log('TURN-Zugang geladen – auch in strengen Netzen erreichbar.'); } }catch(e){ log('TURN-Zugang nicht erreichbar, nutze STUN: '+e.message); } }
+
+/* ================= Helfer ================= */
+const $ = id => document.getElementById(id);
+const params = new URLSearchParams(location.search);
+const room = params.get('r');
+const isHost = !room;
+let ROOM;
+if(room){ ROOM = room; }
+else { try{ ROOM = localStorage.getItem('ps-active-room')||''; }catch(e){} if(!ROOM){ ROOM = Math.random().toString(36).slice(2,8); try{ localStorage.setItem('ps-active-room',ROOM); }catch(e){} } }
+let myId = `bkps-${ROOM}-${Math.random().toString(36).slice(2,7)}`;
+const ANCHOR = `bkps-${ROOM}-anchor`;   // fester Treffpunkt pro Raum – wer ihn hält, ist der aktuelle Anker
+const MAXROOM = 4;
+const slug = s => (s||'gast').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,20)||'gast';
+const pad = (n,l=4)=>String(n).padStart(l,'0');
+const fmtT = ms => { const s=Math.floor(ms/1000); return `${pad(Math.floor(s/3600),2)}:${pad(Math.floor(s/60)%60,2)}:${pad(s%60,2)}`; };
+const fmtMB = b => (b/1048576).toFixed(1)+' MB';
+const MOBILE=/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)||(navigator.maxTouchPoints>1&&/Mac/.test(navigator.platform||''));
+function notice(t){ const n=$('notice'); n.textContent=t; n.classList.toggle('hidden',!t); }
+function log(m){ const el=$('log'); el.textContent = `${new Date().toLocaleTimeString()}  ${m}\n` + el.textContent; console.log(m); }
+$('roleLabel').textContent = isHost ? 'Host · Session '+ROOM : 'Gast · Session '+ROOM;
+$('grTitle').textContent = isHost ? 'Technik-Check (Host)' : 'Willkommen! Kurzer Technik-Check';
+if(!isHost) $('hostPanel').classList.add('hidden');
+if(isHost) $('modeRow').classList.remove('hidden');
+/* ---- Einladungslink schon vor dem Betreten ---- */
+function inviteUrl(){ const meet = isHost ? ($('modeSel')?.value==='meeting') : (S.kind==='meeting'); return location.origin+location.pathname+'?r='+ROOM+(meet?'&m=meeting':''); }
+function refreshInvite(){ if(!isHost) return; const p=$('preLink'); if(p) p.value=inviteUrl(); const c=$('preCode'); if(c) c.textContent=ROOM; }
+function mailInvite(){ const meet=inviteUrl().includes('m=meeting');
+  const subj=meet?'Einladung zum Team-Meeting':'Einladung zur Podcast-Aufnahme';
+  const body=(meet?'Hallo,\n\nich lade dich zu einem Online-Meeting ein. Klick zum vereinbarten Zeitpunkt einfach auf diesen Link (am besten Chrome oder Edge am Computer):'
+                  :'Hallo,\n\nich lade dich zu einer Podcast-Aufnahme ein. Klick zum vereinbarten Zeitpunkt einfach auf diesen Link (am besten Chrome oder Edge am Computer):')
+    +'\n\n'+inviteUrl()+'\n\nDu musst nichts installieren.\n\nViele Grüße';
+  location.href='mailto:?subject='+encodeURIComponent(subj)+'&body='+encodeURIComponent(body); }
+if(isHost){ $('invitePre').classList.remove('hidden'); refreshInvite();
+  $('modeSel').addEventListener('change',refreshInvite);
+  $('preCopy').onclick=()=>{ navigator.clipboard.writeText($('preLink').value).then(()=>{ $('preCopy').textContent='Kopiert ✓'; setTimeout(()=>$('preCopy').textContent='Kopieren',1500); }); };
+  $('preMail').onclick=mailInvite;
+  $('preNew').onclick=()=>{ ROOM=Math.random().toString(36).slice(2,8); try{ localStorage.setItem('ps-active-room',ROOM); }catch(e){} myId='bkps-'+ROOM+'-host'; $('roleLabel').textContent='Host · '+($('modeSel')?.value==='meeting'?'Meeting ':'Session ')+ROOM; refreshInvite(); };
+}
+try{ const n=localStorage.getItem('ps-name'); if(n) $('nameIn').value=n; }catch(e){}
+
+/* ================= IndexedDB (Absturzsicherung) ================= */
+const DB = (()=>{ let dbp;
+  function open(){ return dbp ||= new Promise((res,rej)=>{ const r=indexedDB.open('podcast-studio',1);
+    r.onupgradeneeded=()=>r.result.createObjectStore('chunks',{keyPath:'name'}); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }); }
+  async function tx(mode, fn){ const db=await open(); return new Promise((res,rej)=>{ const t=db.transaction('chunks',mode); const s=t.objectStore('chunks'); const out=fn(s); t.oncomplete=()=>res(out&&out.result!==undefined?out.result:out); t.onerror=()=>rej(t.error); }); }
+  return {
+    put:o=>tx('readwrite',s=>s.put(o)),
+    all:()=>tx('readonly',s=>s.getAll()),
+    mark:async name=>{ const db=await open(); return new Promise(res=>{ const t=db.transaction('chunks','readwrite'); const s=t.objectStore('chunks'); const g=s.get(name); g.onsuccess=()=>{ if(g.result){ g.result.uploaded=true; s.put(g.result);} }; t.oncomplete=res; }); },
+    clear:()=>tx('readwrite',s=>s.clear())
+  };
+})();
+
+/* ================= Upload-Warteschlange ================= */
+const Up = { queue:[], busy:false, done:0, bytes:0,
+  add(item){ this.queue.push(item); this.run(); },
+  async run(){
+    if(this.busy) return; this.busy=true;
+    while(this.queue.length){
+      const it=this.queue[0]; let ok=false, wait=2000;
+      while(!ok){
+        try{
+          const fd=new FormData(); fd.append('name',it.name); fd.append('file',it.blob,it.name);
+          const r=await fetch(uploadUrl(),{method:'POST',body:fd});
+          if(!r.ok) throw new Error('HTTP '+r.status);
+          ok=true;
+        }catch(e){ log(`Upload ${it.name} fehlgeschlagen (${e.message}) – neuer Versuch in ${wait/1000}s`); await new Promise(r=>setTimeout(r,wait)); wait=Math.min(wait*2,30000); }
+      }
+      await DB.mark(it.name); this.done++; this.bytes+=it.blob.size; this.queue.shift();
+    }
+    this.busy=false;
+  }
+};
+// Nach Absturz/Neuladen: offene Teile weiter hochladen
+DB.all().then(list=>{ const open=list.filter(x=>!x.uploaded).sort((a,b)=>a.name.localeCompare(b.name));
+  if(open.length){ log(`${open.length} noch nicht hochgeladene Teile gefunden – lade weiter hoch.`); open.forEach(x=>Up.add(x)); } }).catch(()=>{});
+
+/* ================= Aufnahme pro Spur ================= */
+function pickMime(list){ return list.find(m=>window.MediaRecorder && MediaRecorder.isTypeSupported(m)) || ''; }
+class Track {
+  constructor(kind, stream, opts, ext){
+    this.kind=kind; this.ext=ext; this.idx=0; this.parts=[]; this.size=0; this.firstAt=null; this.lastFlush=Date.now();
+    this.rec=new MediaRecorder(stream, opts);
+    this.rec.ondataavailable=e=>{ if(!e.data||!e.data.size) return; if(this.firstAt===null) this.firstAt=Date.now();
+      this.parts.push(e.data); this.size+=e.data.size;
+      const tooOld = kind==='audio' && Date.now()-this.lastFlush > AUDIO_CHUNK_SEC*1000;
+      if(this.size>=CHUNK_MAX*0.85 || tooOld) this.flush(); };
+    this.stopped=new Promise(r=>this.rec.onstop=()=>{ this.flush(); r(); });
+  }
+  start(){ this.startAt=Date.now(); this.rec.start(1000); }
+  stop(){ if(this.rec.state!=='inactive') this.rec.stop(); return this.stopped; }
+  flush(){ if(!this.parts.length) return; const blob=new Blob(this.parts,{type:this.rec.mimeType}); this.parts=[]; this.size=0; this.lastFlush=Date.now();
+    const name=`${S.session}__${S.who}__${this.kind}__${pad(++this.idx)}.${this.ext}`;
+    const item={name,blob,uploaded:false,session:S.session}; DB.put(item).catch(()=>{}); Up.add(item); }
+}
+
+/* ================= Zustand ================= */
+const S = { raw:null, stream:null, kind:'podcast', consents:{}, peer:null, conns:{}, calls:{}, names:{}, status:{}, recording:false, t0:0, session:'', who:'', tracks:[], markers:[], wake:null };
+if(params.get('m')==='meeting') S.kind='meeting';
+if(S.kind==='meeting'){ const _ms=document.getElementById('modeSel'); if(_ms) _ms.value='meeting'; applyKind(); }
+
+/* ================= Hintergrund (Freistellung im Browser) ================= */
+const BG = { mode:'none', seg:null, loading:null, track:null, busy:false, bkCache:null,
+  vid:document.createElement('video'), out:document.createElement('canvas'), person:document.createElement('canvas'), mask:document.createElement('canvas') };
+BG.vid.muted=true; BG.vid.playsInline=true;
+BG.small=document.createElement('canvas'); BG.small.width=192; BG.small.height=108; BG.last=0; BG.n=0;
+const BG_COLORS = { grau:'#3b4048', hell:'#e9ebe6', gruen:'#12271f' };
+async function loadSeg(){
+  return BG.loading ||= (async()=>{
+    const v=await import(VISION+'/vision_bundle.mjs');
+    const fs=await v.FilesetResolver.forVisionTasks(VISION+'/wasm');
+    const opts=(m,d)=>({baseOptions:{modelAssetPath:m,delegate:d},runningMode:'VIDEO',outputCategoryMask:false,outputConfidenceMasks:true});
+    log('Hintergrund-Erkennung wird geladen …');
+    let seg;
+    try{ seg=await v.ImageSegmenter.createFromOptions(fs,opts(SEG_MODEL,'GPU')); BG.inv=true; }      // Maske 0 = Hintergrund
+    catch(e){ try{ seg=await v.ImageSegmenter.createFromOptions(fs,opts(SEG_FALLBACK,'GPU')); }
+              catch(e2){ seg=await v.ImageSegmenter.createFromOptions(fs,opts(SEG_FALLBACK,'CPU')); } BG.inv=false; }
+    BG.sm=null; BG.seg=seg;
+    log('Hintergrund-Erkennung bereit.');
+  })().catch(e=>{ BG.loading=null; log('Hintergrund-Erkennung nicht verfügbar: '+e.message); });
+}
+function videoTrackFor(raw){
+  BG.vid.srcObject=new MediaStream([raw]); BG.vid.play().catch(()=>{});
+  const s=raw.getSettings(); BG.out.width=s.width||1280; BG.out.height=s.height||720; BG.bkCache=null;
+  if(!BG.track){
+    BG.track=BG.out.captureStream(30).getVideoTracks()[0];
+    // Takt aus einem Worker: läuft auch weiter, wenn das Fenster kurz im Hintergrund ist
+    const w=new Worker(URL.createObjectURL(new Blob(['setInterval(()=>postMessage(0),33)'],{type:'text/javascript'})));
+    w.onmessage=drawFrame;
+  }
+  return BG.track;
+}
+/* Zusammensetzen per WebGL: Maske wird weich hochskaliert und erst in voller Auflösung geschärft -> saubere Kanten */
+function initGL(){
+  const gl=BG.out.getContext('webgl',{premultipliedAlpha:false,preserveDrawingBuffer:true,antialias:false}); if(!gl) return null;
+  const sh=(t,s)=>{ const o=gl.createShader(t); gl.shaderSource(o,s); gl.compileShader(o); return o; };
+  const pr=gl.createProgram();
+  gl.attachShader(pr,sh(gl.VERTEX_SHADER,'attribute vec2 p; varying vec2 uv; void main(){ uv=vec2(p.x*.5+.5,.5-p.y*.5); gl_Position=vec4(p,0.,1.); }'));
+  gl.attachShader(pr,sh(gl.FRAGMENT_SHADER,`precision mediump float; varying vec2 uv;
+    uniform sampler2D uVid,uMask,uBg; uniform float uOn; uniform vec2 uT;
+    float M(vec2 o){ return texture2D(uMask,uv+o*uT).r; }
+    void main(){ vec4 v=texture2D(uVid,uv); if(uOn<.5){ gl_FragColor=v; return; }
+      float m=M(vec2(0.))*.25+(M(vec2(1.,0.))+M(vec2(-1.,0.))+M(vec2(0.,1.))+M(vec2(0.,-1.)))*.125
+             +(M(vec2(1.,1.))+M(vec2(-1.,1.))+M(vec2(1.,-1.))+M(vec2(-1.,-1.)))*.0625;
+      float a=smoothstep(.48,.72,m);
+      gl_FragColor=vec4(mix(texture2D(uBg,uv).rgb,v.rgb,a),1.); }`));
+  gl.linkProgram(pr); if(!gl.getProgramParameter(pr,gl.LINK_STATUS)) return null; gl.useProgram(pr);
+  gl.bindBuffer(gl.ARRAY_BUFFER,gl.createBuffer()); gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),gl.STATIC_DRAW);
+  const loc=gl.getAttribLocation(pr,'p'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+  const tex=i=>{ const t=gl.createTexture(); gl.activeTexture(gl.TEXTURE0+i); gl.bindTexture(gl.TEXTURE_2D,t);
+    for(const [k,v] of [[gl.TEXTURE_MIN_FILTER,gl.LINEAR],[gl.TEXTURE_MAG_FILTER,gl.LINEAR],[gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE],[gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D,k,v); return t; };
+  tex(0); tex(1); tex(2); gl.pixelStorei(gl.UNPACK_ALIGNMENT,1);
+  gl.uniform1i(gl.getUniformLocation(pr,'uVid'),0); gl.uniform1i(gl.getUniformLocation(pr,'uMask'),1); gl.uniform1i(gl.getUniformLocation(pr,'uBg'),2);
+  return {gl,uOn:gl.getUniformLocation(pr,'uOn'),uT:gl.getUniformLocation(pr,'uT')};
+}
+function drawFrame(){
+  const v=BG.vid; if(v.readyState<2) return;
+  const now=performance.now(); if(now-BG.last<28) return; BG.last=now;   // Rückstau vermeiden
+  const W=BG.out.width, H=BG.out.height;
+  const G=(BG.gl ||= initGL()); if(!G) return; const gl=G.gl;
+  gl.viewport(0,0,W,H);
+  gl.activeTexture(gl.TEXTURE0); gl.texImage2D(gl.TEXTURE_2D,0,gl.RGB,gl.RGB,gl.UNSIGNED_BYTE,v);
+  const on=BG.mode!=='none' && BG.seg;
+  if(on){
+    // Maske: jedes Bild; nur wenn das Gerät dafür zu langsam ist, jedes zweite
+    if(!BG.slow || (BG.n++ % 2===0)){ const t0=performance.now();
+      try{ BG.seg.segmentForVideo(v, t0, r=>{
+        const m=r.confidenceMasks[0], f=m.getAsFloat32Array(), n=f.length;
+        if(!BG.sm||BG.sm.length!==n){ BG.sm=new Float32Array(n); BG.m8=new Uint8Array(n); BG.mw=m.width; BG.mh=m.height; for(let i=0;i<n;i++) BG.sm[i]=BG.inv?1-f[i]:f[i]; }
+        const sm=BG.sm, m8=BG.m8, inv=BG.inv;
+        for(let i=0;i<n;i++){ const p=inv?1-f[i]:f[i]; const s=sm[i]=sm[i]*.3+p*.7; m8[i]=s*255; }   // leichte zeitliche Glättung gegen Flackern
+        BG.maskNew=true; }); }catch(e){}
+      const dt=performance.now()-t0; BG.avg=(BG.avg||dt)*.9+dt*.1; BG.slow=BG.avg>24; }
+    if(BG.maskNew){ gl.activeTexture(gl.TEXTURE1); gl.texImage2D(gl.TEXTURE_2D,0,gl.LUMINANCE,BG.mw,BG.mh,0,gl.LUMINANCE,gl.UNSIGNED_BYTE,BG.m8); BG.maskNew=false; }
+    // Hintergrund
+    let src=null;
+    if(BG.mode==='blur'){ const sm=BG.small.getContext('2d'); sm.filter='blur(3px)'; sm.drawImage(v,-4,-3,200,114); src=BG.small; }
+    else if(BG.bgKey!==BG.mode+W+'x'+H){ BG.bgKey=BG.mode+W+'x'+H;
+      if(BG.mode==='bk') src=bkBackground(W,H);
+      else { const c=BG.flat ||= document.createElement('canvas'); c.width=16; c.height=9; const x=c.getContext('2d'); x.fillStyle=BG_COLORS[BG.mode]||'#3b4048'; x.fillRect(0,0,16,9); src=c; } }
+    if(src){ gl.activeTexture(gl.TEXTURE2); gl.texImage2D(gl.TEXTURE_2D,0,gl.RGB,gl.RGB,gl.UNSIGNED_BYTE,src); if(BG.mode==='blur') BG.bgKey=null; }
+  }
+  gl.uniform1f(G.uOn, on&&BG.mw?1:0); gl.uniform2f(G.uT, 1/(BG.mw||256), 1/(BG.mh||256));
+  gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+}
+function bkBackground(W,H){
+  if(BG.bkCache && BG.bkCache.width===W && BG.bkCache.height===H) return BG.bkCache;
+  const c=document.createElement('canvas'); c.width=W; c.height=H; const x=c.getContext('2d');
+  const g=x.createLinearGradient(0,0,W,H); g.addColorStop(0,'#0f1a2e'); g.addColorStop(.55,'#161b3d'); g.addColorStop(1,'#0c0f22'); x.fillStyle=g; x.fillRect(0,0,W,H);
+  const glow=(cx,cy,r,col)=>{ const rg=x.createRadialGradient(cx,cy,0,cx,cy,r); rg.addColorStop(0,col); rg.addColorStop(1,'rgba(0,0,0,0)'); x.fillStyle=rg; x.fillRect(0,0,W,H); };
+  glow(W*.18,H*.38,W*.42,'rgba(18,150,150,.42)'); glow(W*.82,H*.28,W*.38,'rgba(105,85,215,.32)');
+  // Netzwerk-Logo oben rechts
+  const s=H*.0024, ox=W-160*s-H*.07, oy=H*.08;
+  const N={tl:[40,0],tr:[120,0],ml:[0,70],c:[80,70],mr:[160,70],bl:[40,138],br:[120,138]};
+  const P=k=>[ox+N[k][0]*s, oy+N[k][1]*s];
+  x.strokeStyle='rgba(150,170,230,.55)'; x.lineWidth=Math.max(1,H*.0022);
+  [['tl','tr'],['tl','c'],['tr','c'],['ml','c'],['ml','bl'],['bl','c'],['c','mr'],['mr','br'],['br','c']].forEach(([a,b])=>{ x.beginPath(); x.moveTo(...P(a)); x.lineTo(...P(b)); x.stroke(); });
+  const dot=(k,col,r)=>{ x.fillStyle=col; x.beginPath(); x.arc(...P(k),r,0,7); x.fill(); };
+  ['tl','ml','bl'].forEach(k=>dot(k,'#8b6cf6',H*.008)); ['tr','mr','br'].forEach(k=>dot(k,'#22d3c5',H*.008)); dot('c','#22d3c5',H*.012);
+  // Schriftzug oben links
+  const fs=H*.068, lx=H*.07, ly=H*.07;
+  x.font=`800 ${fs}px Inter, system-ui, sans-serif`; x.fillStyle='#eef1f8'; x.fillText('BIOHACKING',lx,ly+fs);
+  const tg=x.createLinearGradient(lx,0,lx+fs*5.2,0); tg.addColorStop(0,'#14d6c4'); tg.addColorStop(.5,'#4aa3f0'); tg.addColorStop(1,'#8b6cf6');
+  x.fillStyle=tg; x.fillText('KOMPAKT',lx,ly+fs*2.05);
+  x.font=`600 ${H*.022}px Inter, system-ui, sans-serif`; x.fillStyle='rgba(200,210,235,.75)';
+  x.fillText('P E P T I D E  ·  L O N G E V I T Y  ·  B I O H A C K I N G',lx,ly+fs*2.05+H*.05);
+  x.fillStyle='rgba(20,214,196,.85)'; x.fillText('D E R   P O D C A S T',lx,ly+fs*2.05+H*.09);
+  BG.bkCache=c; return c;
+}
+function setBg(mode){
+  BG.mode=mode; document.querySelectorAll('.bgSel').forEach(s=>s.value=mode);
+  try{ localStorage.setItem('ps-bg',mode); }catch(e){}
+  if(mode!=='none') loadSeg();
+}
+document.querySelectorAll('.bgSel').forEach(s=>s.addEventListener('change',()=>setBg(s.value)));
+if(MOBILE) notice('Tipp: Am Computer (Chrome oder Edge) läuft die Aufnahme am stabilsten. Am Handy kannst du ebenfalls teilnehmen – der Hintergrund-Filter ist dort aber nicht verfügbar.');
+if(MOBILE){ document.querySelectorAll('.bgSel').forEach(s=>{ s.disabled=true; s.options[0].textContent='Am Handy nicht verfügbar'; }); }
+else try{ const b=localStorage.getItem('ps-bg'); if(b) setBg(b); }catch(e){}
+
+/* ================= Geräte & Vorschau ================= */
+let ac, selfAnalyser;
+async function listDevices(){
+  const d=await navigator.mediaDevices.enumerateDevices();
+  const fill=(sel,kind)=>{ const cur=sel.value; sel.innerHTML=''; d.filter(x=>x.kind===kind).forEach((x,i)=>{ const o=document.createElement('option'); o.value=x.deviceId; o.textContent=x.label||`${kind} ${i+1}`; sel.appendChild(o); }); if(cur) sel.value=cur; };
+  fill($('micSel'),'audioinput'); fill($('camSel'),'videoinput');
+  const none=document.createElement('option'); none.value='none'; none.textContent='Keine Kamera (nur Audio)'; $('camSel').appendChild(none);
+}
+async function getStream(){
+  if(S.raw) S.raw.getTracks().forEach(t=>t.stop());
+  const hp=$('headphones').checked;
+  const cam=$('camSel').value;
+  const constraints={
+    audio:{ deviceId:$('micSel').value?{exact:$('micSel').value}:undefined, echoCancellation:(S.kind==='meeting')?true:!hp, noiseSuppression:(S.kind==='meeting')?true:!hp, autoGainControl:(S.kind==='meeting'), channelCount:1, sampleRate:48000 },
+    video: cam==='none' ? false : { deviceId:cam?{exact:cam}:undefined, width:{ideal:1280}, height:{ideal:720}, frameRate:{ideal:30} }
+  };
+  try{ S.raw=await navigator.mediaDevices.getUserMedia(constraints); }
+  catch(e){ constraints.video=false; S.raw=await navigator.mediaDevices.getUserMedia(constraints); log('Kamera nicht verfügbar – nur Audio.'); }
+  const vt=S.raw.getVideoTracks()[0];
+  S.stream = (vt && !MOBILE) ? new MediaStream([...S.raw.getAudioTracks(), videoTrackFor(vt)]) : S.raw;   // am Handy Kamera direkt (stabiler)
+  $('previewVid').srcObject=S.stream;
+  ac ||= new AudioContext();
+  selfAnalyser=meterFor(S.stream,$('selfMeter'));
+  // Laufende Calls mit neuen Spuren versorgen
+  Object.values(S.calls).forEach(c=>{ const pc=c.peerConnection; if(!pc) return; pc.getSenders().forEach(snd=>{ const t=S.stream.getTracks().find(x=>x.kind===snd.track?.kind); if(t) snd.replaceTrack(t); }); });
+}
+function meterFor(stream, el){
+  if(!stream.getAudioTracks().length) return;
+  const src=ac.createMediaStreamSource(stream); const an=ac.createAnalyser(); an.fftSize=1024; src.connect(an);
+  const buf=new Float32Array(an.fftSize);
+  (function loop(){ an.getFloatTimeDomainData(buf); let p=0; for(const v of buf) p=Math.max(p,Math.abs(v)); el.style.width=Math.min(100,Math.sqrt(p)*110)+'%'; requestAnimationFrame(loop); })();
+  return an;
+}
+(async()=>{
+  if(!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder){ notice('Dieser Browser kann nicht aufnehmen. Wenn du den Link aus WhatsApp, Mail oder einer anderen App geöffnet hast: bitte den Link kopieren und direkt in Safari (iPhone) bzw. Chrome (Android/Computer) öffnen.'); $('joinBtn').disabled=true; return; }
+  try{ S.stream=await navigator.mediaDevices.getUserMedia({audio:true,video:true}).catch(()=>navigator.mediaDevices.getUserMedia({audio:true})); S.stream.getTracks().forEach(t=>t.stop()); S.stream=null;
+    await listDevices(); await getStream(); }
+  catch(e){ notice('Kein Zugriff auf Mikrofon/Kamera ('+e.name+'). Bitte im Browser die Freigabe für diese Seite erlauben und die Seite neu laden. Falls der Link in einer App (WhatsApp, Mail) geöffnet wurde: direkt in Safari bzw. Chrome öffnen.'); }
+})();
+['micSel','camSel','headphones'].forEach(id=>$(id).addEventListener('change',()=>getStream()));
+
+/* ================= Verbindung (PeerJS / WebRTC) – raum-basiert, owner-unabhängig ================= */
+let amAnchor=false, rv=null, rvTimer=null;
+$('joinBtn').onclick=async()=>{
+  const name=$('nameIn').value.trim(); if(!name){ $('nameIn').focus(); return; }
+  try{ localStorage.setItem('ps-name',name); }catch(e){}
+  if(isHost) S.kind=$('modeSel').value;
+  S.who=slug(name)+(isHost?'':'-'+myId.slice(-3)); S.names[myId]=name;
+  applyKind();
+  ac?.resume?.();
+  $('greenroom').classList.add('hidden'); $('studio').classList.remove('hidden');
+  addTile(myId,name,S.stream,true);
+  $('guestLink').value=guestUrl();
+  await loadIce();
+  startPeer();
+  setInterval(sendStatus,2000); renderStatus();
+};
+function startPeer(){
+  S.peer=new Peer(myId,{config:{iceServers:ICE}});
+  S.peer.on('open',()=>{ log('Mit Signalserver verbunden.'); findRoom(); });
+  S.peer.on('error',e=>{ log('Verbindungsfehler: '+e.type); });
+  S.peer.on('connection',c=>setupConn(c));
+  S.peer.on('call',call=>{ if(call.metadata?.type==='screen'){ call.answer(); call.on('stream',st=>addTile('screen-'+call.peer,'🖥️ '+(call.metadata.name||S.names[call.peer]||'Bildschirm'),st,false)); call.on('close',()=>removeTile('screen-'+call.peer)); return; } call.answer(S.stream); setupCall(call); });
+}
+/* --- Raum halten / finden: wer zuerst da ist, hält den Raum (Anker). Geht er, übernimmt automatisch der nächste.
+       Die Medienverbindungen der anderen bleiben dabei bestehen – der Anker dient nur dem Finden neuer Teilnehmer. --- */
+function serveRoster(rc){ rc.on('open',()=>{
+    const peers=[myId,...Object.keys(S.conns)];
+    if(peers.length>=MAXROOM){ try{rc.send({t:'full'});}catch(e){} setTimeout(()=>{try{rc.close()}catch(e){}},800); return; }
+    try{ rc.send({t:'roster',peers,names:S.names,recording:S.recording,session:S.session,t0:S.t0,kind:S.kind}); }catch(e){}
+    setTimeout(()=>{try{rc.close()}catch(e){}},2000); }); }
+function becomeAnchor(ap){ amAnchor=true; S.anchorPeer=ap; log('Du hältst den Raum gerade offen.');
+  ap.on('connection',serveRoster);
+  ap.on('disconnected',()=>{ try{ap.reconnect();}catch(e){} });
+  ap.on('error',e=>{ log('Raum-Hinweis: '+e.type); }); }
+function claimAnchor(onBusy){ let done=false; const ap=new Peer(ANCHOR,{config:{iceServers:ICE}});
+  ap.on('open',()=>{ done=true; becomeAnchor(ap); });
+  ap.on('error',e=>{ if(done) return; if(e.type==='unavailable-id'){ try{ap.destroy();}catch(_){} onBusy&&onBusy(); } else { log('Raum-Fehler: '+e.type); setTimeout(()=>onBusy&&onBusy(),1500); } }); }
+function findRoom(){ if(S.left) return; claimAnchor(connectRendezvous); }
+function connectRendezvous(){ if(S.left||amAnchor) return;
+  let c; try{ c=S.peer.connect(ANCHOR,{reliable:true,metadata:{name:S.names[myId]}}); }catch(e){ return scheduleReelect(); }
+  rv=c;
+  c.on('open',()=>{ try{ c.send({t:'join',name:S.names[myId]}); }catch(e){} });
+  c.on('data',d=>{
+    if(d.t==='full'){ notice('Der Raum ist voll (max. '+MAXROOM+' Personen).'); try{c.close()}catch(e){} return; }
+    if(d.t==='roster'){ Object.assign(S.names,d.names); if(d.kind){ S.kind=d.kind; applyKind(); }
+      (d.peers||[]).forEach(p=>{ if(p!==myId) connectTo(p); });
+      if(d.recording) startRec(d.session,d.t0,false); } });
+  c.on('error',()=>scheduleReelect());
+  c.on('close',()=>{ if(!S.left && !amAnchor) scheduleReelect(); }); }
+function scheduleReelect(){ if(S.left||amAnchor||rvTimer) return;
+  rvTimer=setTimeout(()=>{ rvTimer=null; if(S.left||amAnchor) return; claimAnchor(connectRendezvous); }, 400+Math.random()*1600); }
+function connectTo(id){ if(!id||id===myId||id===ANCHOR||S.conns[id]||S.left) return;
+  const c=S.peer.connect(id,{reliable:true,metadata:{name:S.names[myId]}}); setupConn(c,false);
+  const call=S.peer.call(id,S.stream,{metadata:{name:S.names[myId]}}); setupCall(call,false); }
+function setupConn(c,incoming=true){ if(c.peer===ANCHOR) return;
+  S.conns[c.peer]=c; if(incoming && c.metadata?.name) S.names[c.peer]=c.metadata.name;
+  c.on('open',()=>{ log(`Datenkanal zu ${S.names[c.peer]||c.peer} offen.`);
+    try{ c.send({t:'hello',name:S.names[myId]}); }catch(e){} if(screenStream) callScreen(c.peer); });
+  c.on('data',d=>onData(c.peer,d));
+  c.on('close',()=>{ log(`${S.names[c.peer]||c.peer} hat die Verbindung getrennt.`); delete S.conns[c.peer]; removeTile(c.peer); renderStatus(); });
+}
+function setupCall(call,incoming=true){
+  S.calls[call.peer]=call; if(incoming && call.metadata?.name) S.names[call.peer]=call.metadata.name;
+  call.on('stream',st=>{ notice(''); addTile(call.peer,S.names[call.peer]||'Gast',st,false); });
+  const pc=call.peerConnection;
+  if(pc) pc.addEventListener('iceconnectionstatechange',()=>{ log('Verbindung zu '+(S.names[call.peer]||'Teilnehmer')+': '+pc.iceConnectionState);
+    if(pc.iceConnectionState==='failed') notice('Die direkte Verbindung zu '+(S.names[call.peer]||'einem Teilnehmer')+' kommt nicht zustande – das Netz (meist Mobilfunk oder Firmen-WLAN) blockiert sie. Bitte in ein normales WLAN wechseln und die Seite neu laden.');
+    if(pc.iceConnectionState==='connected'||pc.iceConnectionState==='completed') notice(''); });
+  call.on('close',()=>removeTile(call.peer));
+}
+function broadcast(msg){ Object.values(S.conns).forEach(c=>{ if(c.open) c.send(msg); }); }
+function onData(from,d){
+  switch(d.t){
+    case 'hello': S.names[from]=d.name; const tl=document.querySelector(`[data-peer="${from}"] .name`); if(tl) tl.textContent=d.name; break;
+    case 'roster': Object.assign(S.names,d.names); if(d.kind){ S.kind=d.kind; applyKind(); } d.peers.forEach(p=>connectTo(p)); if(d.recording) startRec(d.session,d.t0,false); break;
+    case 'bye': S.calls[from]?.close(); delete S.calls[from]; removeTile(from); log(`${S.names[from]||'Teilnehmer'} hat das Studio verlassen.`); break;
+    case 'full': alert('Das Studio ist voll (max. 3 Personen).'); break;
+    case 'rec-start': startRec(d.session,d.t0,true); break;
+    case 'rec-stop': stopRec(); break;
+    case 'consent-req': showConsent(d.session,d.t0); break;
+    case 'consent': S.consents[from]={name:S.names[from]||d.name,ok:d.ok}; renderConsents(); break;
+    case 'screen-on': log((S.names[from]||'Teilnehmer')+' teilt den Bildschirm.'); break;
+    case 'screen-off': removeTile('screen-'+from); break;
+    case 'marker': addMarker(d.m,false); break;
+    case 'status': S.status[from]=d; renderStatus(); break;
+  }
+}
+
+/* ================= Kacheln ================= */
+function addTile(id,name,stream,self){
+  removeTile(id);
+  const div=document.createElement('div'); div.className='tile'; div.dataset.peer=id;
+  const v=document.createElement('video'); v.autoplay=true; v.playsInline=true; v.muted=self; v.srcObject=stream;
+  const n=document.createElement('div'); n.className='name'; n.textContent=name+(self?' (du)':'');
+  const m=document.createElement('div'); m.className='meter lvl'; const mi=document.createElement('div'); m.appendChild(mi);
+  div.append(v,n,m); $('tiles').appendChild(div);
+  if(ac) try{ meterFor(stream,mi); }catch(e){}
+  if(!stream.getVideoTracks().length) v.style.background='#1c2030';
+}
+function removeTile(id){ document.querySelector(`[data-peer="${id}"]`)?.remove(); }
+
+/* ================= Aufnahme steuern ================= */
+$('recBtn').onclick=async()=>{
+  if(!S.recording){
+    if(Object.keys(S.conns).length===0 && !confirm('Noch kein Gast verbunden. Trotzdem starten?')) return;
+    const d=new Date(); const session=`${d.getFullYear()}-${pad(d.getMonth()+1,2)}-${pad(d.getDate(),2)}_${pad(d.getHours(),2)}${pad(d.getMinutes(),2)}_${ROOM}`;
+    if(S.kind==='meeting'){
+      const t0=Date.now(); S.consents={};
+      broadcast({t:'consent-req',session,t0});
+      $('consentList').classList.remove('hidden'); renderConsents();
+      showConsent(session,t0);        // Host stimmt für sich selbst zu
+      return;
+    }
+    await countdown(); const t0=Date.now();
+    broadcast({t:'rec-start',session,t0}); startRec(session,t0,false);
+  } else {
+    if(!confirm('Aufnahme beenden?')) return;
+    broadcast({t:'rec-stop'}); stopRec();
+  }
+};
+async function countdown(){ const el=$('countdown'); el.style.display='flex'; for(const n of [3,2,1]){ el.textContent=n; await new Promise(r=>setTimeout(r,800)); } el.style.display='none'; }
+function startRec(session,t0,withCountdown){
+  if(S.recording) return;
+  S.recording=true; S.session=session; S.t0=t0; S.markers=[];
+  const aMime=pickMime(['audio/webm;codecs=opus','audio/ogg;codecs=opus','audio/mp4']);
+  const aExt=aMime.includes('mp4')?'m4a':aMime.includes('ogg')?'ogg':'webm';
+  const audioOnly=new MediaStream(S.stream.getAudioTracks());
+  S.tracks=[new Track('audio',audioOnly,{mimeType:aMime,audioBitsPerSecond:AUDIO_BPS},aExt)];
+  if(S.stream.getVideoTracks().length){
+    const vMime=pickMime(['video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm','video/mp4']);
+    S.tracks.push(new Track('video',S.stream,{mimeType:vMime,videoBitsPerSecond:VIDEO_BPS,audioBitsPerSecond:128000},vMime.includes('mp4')?'mp4':'webm'));
+  }
+  S.tracks.forEach(t=>t.start());
+  $('recBtn').textContent='■ Aufnahme beenden'; $('markBtn').disabled=false;
+  $('recBadge').textContent='AUFNAHME'; $('recBadge').classList.add('live');
+  navigator.wakeLock?.request('screen').then(w=>S.wake=w).catch(()=>{});
+  S.timer=setInterval(()=>$('timer').textContent=fmtT(Date.now()-S.t0),500);
+  log('Aufnahme läuft – Session '+session);
+}
+async function stopRec(){
+  if(!S.recording) return; S.recording=false;
+  await Promise.all(S.tracks.map(t=>t.stop()));
+  clearInterval(S.timer); S.wake?.release?.();
+  $('recBtn').textContent='● Neue Aufnahme starten'; $('markBtn').disabled=true;
+  $('recBadge').textContent='beendet – lädt hoch'; $('recBadge').classList.remove('live');
+  const meta={ session:S.session, who:S.who, name:S.names[myId], host:isHost, t0:S.t0, ua:navigator.userAgent, headphones:$('headphones').checked,
+    tracks:S.tracks.map(t=>({kind:t.kind,mime:t.rec.mimeType,startAt:t.startAt,firstDataAt:t.firstAt,offsetMs:t.startAt-S.t0,parts:t.idx})),
+    markers:isHost?S.markers:undefined, participants:isHost?S.names:undefined };
+  const blob=new Blob([JSON.stringify(meta,null,2)],{type:'application/json'});
+  const item={name:`${S.session}__${S.who}__meta.json`,blob,uploaded:false,session:S.session}; DB.put(item).catch(()=>{}); Up.add(item);
+  log('Aufnahme beendet. Restliche Teile werden hochgeladen …');
+}
+
+$('copyBtn').onclick=()=>{ navigator.clipboard.writeText($('guestLink').value).then(()=>{ $('copyBtn').textContent='Kopiert ✓'; setTimeout(()=>$('copyBtn').textContent='Kopieren',1500); }); };
+$('mailBtn').onclick=mailInvite;
+
+/* ================= Meeting-Modus & Einwilligung ================= */
+function applyKind(){
+  const meet=S.kind==='meeting';
+  document.title = meet?'Team-Meeting':'Podcast-Studio';
+  $('roleLabel').textContent = (isHost?'Host':'Gast')+' · '+(meet?'Meeting':'Session')+' '+ROOM;
+  const h=document.querySelector('header h1'); if(h) h.textContent = meet?'👥 Team-Meeting':'🎙️ Podcast-Studio';
+  const ht=document.querySelector('#hostPanel h2'); if(ht) ht.textContent = meet?'Teilnehmer einladen':'Gast einladen';
+  $('inviteHint').textContent = meet
+    ? 'Diesen Link an deine Teilnehmer schicken (max. 2 weitere). Jeder stimmt der Aufzeichnung selbst zu.'
+    : 'Diesen Link an deinen Gast schicken (max. 2 Gäste). Er braucht nichts zu installieren.';
+  $('recBtn').textContent = meet?'● Aufzeichnung starten':'● Aufnahme starten';
+}
+// Gast-Einladungslink trägt die Session-Art
+function guestUrl(){ return location.origin+location.pathname+'?r='+ROOM+(S.kind==='meeting'?'&m=meeting':''); }
+let consentPending=null;
+function showConsent(session,t0){
+  consentPending={session,t0};
+  $('consentText').textContent = isHost
+    ? 'Du zeichnest dieses Meeting auf. Deine eigene Spur startet mit deiner Zustimmung. Jeder Teilnehmer stimmt für sich selbst zu.'
+    : 'Der Host möchte dieses Meeting aufzeichnen (Bild und Ton). Deine Aufnahme startet nur, wenn du zustimmst. Stimmst du nicht zu, bleibst du im Gespräch, wirst aber nicht aufgezeichnet.';
+  $('consent').classList.remove('hidden');
+}
+$('consentYes').onclick=()=>{
+  $('consent').classList.add('hidden');
+  const c=consentPending; consentPending=null; if(!c) return;
+  broadcast({t:'consent',name:S.names[myId],ok:true});
+  S.consents[myId]={name:S.names[myId],ok:true}; renderConsents();
+  startRec(c.session,c.t0,false);
+};
+$('consentNo').onclick=()=>{
+  $('consent').classList.add('hidden'); consentPending=null;
+  broadcast({t:'consent',name:S.names[myId],ok:false});
+  S.consents[myId]={name:S.names[myId],ok:false}; renderConsents();
+  notice('Du nimmst teil, wirst aber nicht aufgezeichnet.');
+};
+function renderConsents(){
+  if(S.kind!=='meeting'){ $('consentList').classList.add('hidden'); return; }
+  const ids=[myId,...Object.keys(S.conns)];
+  const rows=ids.map(id=>{ const c=S.consents[id]; const n=S.names[id]||'…';
+    const s=!c?'<span class="wait">wartet…</span>':c.ok?'<span class="ok">stimmt zu ✓</span>':'<span class="bad">keine Aufzeichnung</span>';
+    return n+': '+s; });
+  const el=$('consentList'); el.classList.remove('hidden'); el.innerHTML='Aufzeichnungs-Einwilligung<br>'+rows.join('<br>');
+}
+
+/* ================= Bildschirm teilen ================= */
+let screenStream=null, screenCalls={};
+$('shareBtn').onclick=async()=>{
+  if(screenStream){ stopShare(); return; }
+  try{ screenStream=await navigator.mediaDevices.getDisplayMedia({video:{frameRate:15},audio:false}); }
+  catch(e){ return; }
+  screenStream.getVideoTracks()[0].addEventListener('ended',stopShare);
+  addTile('screen-'+myId,'🖥️ '+(S.names[myId]||'Bildschirm'),screenStream,true);
+  $('shareBtn').textContent='🖥️ Teilen beenden';
+  Object.keys(S.conns).forEach(callScreen);
+  broadcast({t:'screen-on',name:S.names[myId]});
+};
+function callScreen(id){ if(!screenStream||!S.peer) return; try{ screenCalls[id]=S.peer.call(id,screenStream,{metadata:{type:'screen',name:S.names[myId]}}); }catch(e){} }
+function stopShare(){ if(!screenStream) return;
+  screenStream.getTracks().forEach(t=>t.stop()); screenStream=null;
+  Object.values(screenCalls).forEach(c=>{try{c.close()}catch(e){}}); screenCalls={};
+  removeTile('screen-'+myId); const b=$('shareBtn'); if(b) b.textContent='🖥️ Bildschirm teilen';
+  broadcast({t:'screen-off',id:myId});
+}
+
+/* ================= Studio verlassen ================= */
+$('leaveBtn').onclick=async()=>{
+  if(S.recording){
+    if(!confirm(isHost?'Die Aufnahme läuft noch. Aufnahme für alle beenden und Studio verlassen?':'Die Aufnahme läuft noch. Deine Aufnahme wird beendet und fertig hochgeladen. Studio wirklich verlassen?')) return;
+    if(isHost) broadcast({t:'rec-stop'});
+    await stopRec();
+  }
+  stopShare(); S.left=true; clearTimeout(rvTimer); if(rv){ try{rv.close();}catch(e){} } if(S.anchorPeer){ try{S.anchorPeer.destroy();}catch(e){} S.anchorPeer=null; } amAnchor=false; broadcast({t:'bye'});
+  Object.values(S.calls).forEach(c=>{ try{ c.close(); }catch(e){} }); S.calls={};
+  S.raw?.getTracks().forEach(t=>t.stop());                       // Kamera und Mikro aus
+  $('studio').classList.add('hidden'); $('leftScreen').classList.remove('hidden');
+  $('rejoinBtn').textContent=isHost?'Neues Studio öffnen':'Wieder betreten';
+  const done=()=>Up.queue.length===0 && !Up.busy;
+  while(!done()){ $('leftMsg').textContent=`Deine Aufnahme wird noch hochgeladen (${Up.queue.length} Teile offen) – bitte dieses Fenster offen lassen.`; await new Promise(r=>setTimeout(r,1000)); }
+  sendStatus();                                                   // Host sieht: Warteschlange 0
+  $('leftMsg').textContent='✓ Alles hochgeladen. Du kannst dieses Fenster jetzt schließen.'; $('leftMsg').className='ok';
+  setTimeout(()=>{ try{ S.peer?.destroy(); }catch(e){} },1500);
+};
+$('rejoinBtn').onclick=()=>location.reload();
+$('backupBtn2').onclick=()=>$('backupBtn').click();
+
+/* ================= Marker ================= */
+function addMarker(m,send){
+  S.markers.push(m); const li=document.createElement('li'); li.textContent=`${fmtT(m.ms)} – ${m.by}${m.label?': '+m.label:''}`; $('markers').prepend(li);
+  if(send) broadcast({t:'marker',m});
+}
+function setMarker(){ if(!S.recording) return; addMarker({ms:Date.now()-S.t0,label:$('markLabel').value.trim(),by:S.names[myId]},true); $('markLabel').value=''; }
+$('markBtn').onclick=setMarker;
+document.addEventListener('keydown',e=>{ if(e.key.toLowerCase()==='m' && document.activeElement.tagName!=='INPUT') setMarker(); });
+
+/* ================= Status ================= */
+function sendStatus(){ const st={t:'status',name:S.names[myId],done:Up.done,bytes:Up.bytes,queued:Up.queue.length+S.tracks.reduce((a,t)=>a+(t.parts.length?1:0),0),rec:S.recording};
+  S.status[myId]=st; broadcast(st); renderStatus();
+  if(!S.recording && S.session && st.queued===0) $('recBadge').textContent='alles hochgeladen ✓'; }
+function renderStatus(){
+  const ids=[myId,...Object.keys(S.conns)];
+  $('statusBody').innerHTML=ids.map(id=>{ const s=S.status[id]||{}; const conn=id===myId?'<span class="ok">du</span>':(S.conns[id]?.open?'<span class="ok">verbunden</span>':'<span class="bad">getrennt</span>');
+    const q=s.queued??'–'; return `<tr><td>${S.names[id]||id}</td><td>${conn}</td><td>${s.bytes!=null?fmtMB(s.bytes)+' · '+s.done+' Teile':'–'}</td><td class="${q===0?'ok':'wait'}">${q}</td></tr>`; }).join('');
+}
+window.addEventListener('beforeunload',e=>{ if(S.recording||Up.queue.length){ e.preventDefault(); e.returnValue='Aufnahme läuft oder Upload nicht fertig.'; } });
+
+/* ================= Lokale Sicherung ================= */
+$('backupBtn').onclick=async()=>{
+  const list=(await DB.all()).filter(x=>x.session===S.session||!S.session);
+  if(!list.length){ alert('Keine lokalen Daten vorhanden.'); return; }
+  const groups={}; list.sort((a,b)=>a.name.localeCompare(b.name)).forEach(x=>{ const k=x.name.replace(/__\d{4}\.(\w+)$/,'.$1'); (groups[k] ||= []).push(x.blob); });
+  for(const [name,blobs] of Object.entries(groups)){ const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob(blobs,{type:blobs[0].type})); a.download=name; a.click(); await new Promise(r=>setTimeout(r,600)); }
+};
+</script>
+</body>
+</html>
