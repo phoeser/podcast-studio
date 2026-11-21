@@ -189,7 +189,7 @@
 <script>
 /* ================= Konfiguration ================= */
 const UPLOAD_URL = 'https://hook.eu2.make.com/kvwsz19q0p0iqdtlbna0xo5vq6g30lqp';
-const MEETING_UPLOAD_URL = 'https://hook.eu2.make.com/yjdg65c5cy574iaohc4oxtxkgjgp53uv';
+const MEETING_UPLOAD_URL = 'https://hook.eu2.make.com/d1b9vju7bex1hfrvwkz48a39rzi25wrw';   // Nicoles eigene Ablage
 const uploadUrl = () => (typeof S!=='undefined' && S && S.kind==='meeting') ? MEETING_UPLOAD_URL : UPLOAD_URL;
 const CHUNK_MAX = 3.3 * 1024 * 1024;      // Make-Webhook-Limit 5 MB inkl. Overhead
 const AUDIO_CHUNK_SEC = 60;               // Audio spätestens jede Minute hochladen
@@ -213,7 +213,7 @@ else { try{ ROOM = localStorage.getItem('ps-active-room')||''; }catch(e){} if(!R
 let myId = `bkps-${ROOM}-${Math.random().toString(36).slice(2,7)}`;
 const ANCHOR = `bkps-${ROOM}-anchor`;   // fester Treffpunkt pro Raum – wer ihn hält, ist der aktuelle Anker
 const MAXROOM = 4;
-const slug = s => (s||'gast').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,20)||'gast';
+const slug = s => (s||'gast').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,20)||'gast';
 const pad = (n,l=4)=>String(n).padStart(l,'0');
 const fmtT = ms => { const s=Math.floor(ms/1000); return `${pad(Math.floor(s/3600),2)}:${pad(Math.floor(s/60)%60,2)}:${pad(s%60,2)}`; };
 const fmtMB = b => (b/1048576).toFixed(1)+' MB';
