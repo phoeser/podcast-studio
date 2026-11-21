@@ -196,7 +196,9 @@ const isHost = !room;
 let ROOM;
 if(room){ ROOM = room; }
 else { try{ ROOM = localStorage.getItem('ps-active-room')||''; }catch(e){} if(!ROOM){ ROOM = Math.random().toString(36).slice(2,8); try{ localStorage.setItem('ps-active-room',ROOM); }catch(e){} } }
-let myId = isHost ? `bkps-${ROOM}-host` : `bkps-${ROOM}-${Math.random().toString(36).slice(2,7)}`;
+let myId = `bkps-${ROOM}-${Math.random().toString(36).slice(2,7)}`;
+const ANCHOR = `bkps-${ROOM}-anchor`;   // fester Treffpunkt pro Raum – wer ihn hält, ist der aktuelle Anker
+const MAXROOM = 4;
 const slug = s => (s||'gast').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,20)||'gast';
 const pad = (n,l=4)=>String(n).padStart(l,'0');
 const fmtT = ms => { const s=Math.floor(ms/1000); return `${pad(Math.floor(s/3600),2)}:${pad(Math.floor(s/60)%60,2)}:${pad(s%60,2)}`; };
@@ -445,7 +447,8 @@ function meterFor(stream, el){
 })();
 ['micSel','camSel','headphones'].forEach(id=>$(id).addEventListener('change',()=>getStream()));
 
-/* ================= Verbindung (PeerJS / WebRTC) ================= */
+/* ================= Verbindung (PeerJS / WebRTC) – raum-basiert, owner-unabhängig ================= */
+let amAnchor=false, rv=null, rvTimer=null;
 $('joinBtn').onclick=async()=>{
   const name=$('nameIn').value.trim(); if(!name){ $('nameIn').focus(); return; }
   try{ localStorage.setItem('ps-name',name); }catch(e){}
@@ -457,22 +460,51 @@ $('joinBtn').onclick=async()=>{
   addTile(myId,name,S.stream,true);
   $('guestLink').value=guestUrl();
   await loadIce();
-  S.peer=new Peer(myId,{config:{iceServers:ICE}});
-  S.peer.on('open',()=>{ log('Mit Signalserver verbunden.'); if(!isHost) connectTo(`bkps-${ROOM}-host`); });
-  S.peer.on('error',e=>{ log('Verbindungsfehler: '+e.type); if(e.type==='unavailable-id' && isHost) alert('Diese Session ist schon offen (anderes Fenster?).'); if(e.type==='peer-unavailable' && !isHost) notice('Der Host ist noch nicht im Studio (oder der Link ist veraltet). Es wird automatisch weiter versucht …'), setTimeout(()=>connectTo(`bkps-${ROOM}-host`),5000); });
-  S.peer.on('connection',c=>setupConn(c));
-  S.peer.on('call',call=>{ if(call.metadata?.type==='screen'){ call.answer(); call.on('stream',st=>addTile('screen-'+call.peer,'🖥️ '+(call.metadata.name||S.names[call.peer]||'Bildschirm'),st,false)); call.on('close',()=>removeTile('screen-'+call.peer)); return; } call.answer(S.stream); setupCall(call); });
+  startPeer();
   setInterval(sendStatus,2000); renderStatus();
 };
-function connectTo(id){ if(S.conns[id]||id===myId||S.left) return; const c=S.peer.connect(id,{reliable:true,metadata:{name:S.names[myId]}}); setupConn(c,false); const call=S.peer.call(id,S.stream,{metadata:{name:S.names[myId]}}); setupCall(call,false); }
-function setupConn(c,incoming=true){
+function startPeer(){
+  S.peer=new Peer(myId,{config:{iceServers:ICE}});
+  S.peer.on('open',()=>{ log('Mit Signalserver verbunden.'); findRoom(); });
+  S.peer.on('error',e=>{ log('Verbindungsfehler: '+e.type); });
+  S.peer.on('connection',c=>setupConn(c));
+  S.peer.on('call',call=>{ if(call.metadata?.type==='screen'){ call.answer(); call.on('stream',st=>addTile('screen-'+call.peer,'🖥️ '+(call.metadata.name||S.names[call.peer]||'Bildschirm'),st,false)); call.on('close',()=>removeTile('screen-'+call.peer)); return; } call.answer(S.stream); setupCall(call); });
+}
+/* --- Raum halten / finden: wer zuerst da ist, hält den Raum (Anker). Geht er, übernimmt automatisch der nächste.
+       Die Medienverbindungen der anderen bleiben dabei bestehen – der Anker dient nur dem Finden neuer Teilnehmer. --- */
+function serveRoster(rc){ rc.on('open',()=>{
+    const peers=[myId,...Object.keys(S.conns)];
+    if(peers.length>=MAXROOM){ try{rc.send({t:'full'});}catch(e){} setTimeout(()=>{try{rc.close()}catch(e){}},800); return; }
+    try{ rc.send({t:'roster',peers,names:S.names,recording:S.recording,session:S.session,t0:S.t0,kind:S.kind}); }catch(e){}
+    setTimeout(()=>{try{rc.close()}catch(e){}},2000); }); }
+function becomeAnchor(ap){ amAnchor=true; S.anchorPeer=ap; log('Du hältst den Raum gerade offen.');
+  ap.on('connection',serveRoster);
+  ap.on('disconnected',()=>{ try{ap.reconnect();}catch(e){} });
+  ap.on('error',e=>{ log('Raum-Hinweis: '+e.type); }); }
+function claimAnchor(onBusy){ let done=false; const ap=new Peer(ANCHOR,{config:{iceServers:ICE}});
+  ap.on('open',()=>{ done=true; becomeAnchor(ap); });
+  ap.on('error',e=>{ if(done) return; if(e.type==='unavailable-id'){ try{ap.destroy();}catch(_){} onBusy&&onBusy(); } else { log('Raum-Fehler: '+e.type); setTimeout(()=>onBusy&&onBusy(),1500); } }); }
+function findRoom(){ if(S.left) return; claimAnchor(connectRendezvous); }
+function connectRendezvous(){ if(S.left||amAnchor) return;
+  let c; try{ c=S.peer.connect(ANCHOR,{reliable:true,metadata:{name:S.names[myId]}}); }catch(e){ return scheduleReelect(); }
+  rv=c;
+  c.on('open',()=>{ try{ c.send({t:'join',name:S.names[myId]}); }catch(e){} });
+  c.on('data',d=>{
+    if(d.t==='full'){ notice('Der Raum ist voll (max. '+MAXROOM+' Personen).'); try{c.close()}catch(e){} return; }
+    if(d.t==='roster'){ Object.assign(S.names,d.names); if(d.kind){ S.kind=d.kind; applyKind(); }
+      (d.peers||[]).forEach(p=>{ if(p!==myId) connectTo(p); });
+      if(d.recording) startRec(d.session,d.t0,false); } });
+  c.on('error',()=>scheduleReelect());
+  c.on('close',()=>{ if(!S.left && !amAnchor) scheduleReelect(); }); }
+function scheduleReelect(){ if(S.left||amAnchor||rvTimer) return;
+  rvTimer=setTimeout(()=>{ rvTimer=null; if(S.left||amAnchor) return; claimAnchor(connectRendezvous); }, 400+Math.random()*1600); }
+function connectTo(id){ if(!id||id===myId||id===ANCHOR||S.conns[id]||S.left) return;
+  const c=S.peer.connect(id,{reliable:true,metadata:{name:S.names[myId]}}); setupConn(c,false);
+  const call=S.peer.call(id,S.stream,{metadata:{name:S.names[myId]}}); setupCall(call,false); }
+function setupConn(c,incoming=true){ if(c.peer===ANCHOR) return;
   S.conns[c.peer]=c; if(incoming && c.metadata?.name) S.names[c.peer]=c.metadata.name;
   c.on('open',()=>{ log(`Datenkanal zu ${S.names[c.peer]||c.peer} offen.`);
-    if(isHost){ // neuen Gast über die anderen informieren
-      if(Object.keys(S.conns).length>2){ c.send({t:'full'}); setTimeout(()=>c.close(),500); return; }
-      c.send({t:'roster', peers:Object.keys(S.conns).filter(p=>p!==c.peer), names:S.names, recording:S.recording, session:S.session, t0:S.t0, kind:S.kind});
-    }
-    c.send({t:'hello',name:S.names[myId]}); if(screenStream) callScreen(c.peer); });
+    try{ c.send({t:'hello',name:S.names[myId]}); }catch(e){} if(screenStream) callScreen(c.peer); });
   c.on('data',d=>onData(c.peer,d));
   c.on('close',()=>{ log(`${S.names[c.peer]||c.peer} hat die Verbindung getrennt.`); delete S.conns[c.peer]; removeTile(c.peer); renderStatus(); });
 }
@@ -642,7 +674,7 @@ $('leaveBtn').onclick=async()=>{
     if(isHost) broadcast({t:'rec-stop'});
     await stopRec();
   }
-  stopShare(); S.left=true; broadcast({t:'bye'});
+  stopShare(); S.left=true; clearTimeout(rvTimer); if(rv){ try{rv.close();}catch(e){} } if(S.anchorPeer){ try{S.anchorPeer.destroy();}catch(e){} S.anchorPeer=null; } amAnchor=false; broadcast({t:'bye'});
   Object.values(S.calls).forEach(c=>{ try{ c.close(); }catch(e){} }); S.calls={};
   S.raw?.getTracks().forEach(t=>t.stop());                       // Kamera und Mikro aus
   $('studio').classList.add('hidden'); $('leftScreen').classList.remove('hidden');
